@@ -229,6 +229,8 @@ DeepMail Studio detects local desktop mail clients from Windows app paths. Autom
 
 The campaign workbench can send the currently reviewed approved email, select all approved rows, or send selected approved/drafted rows in one go. Other detected clients, such as New Outlook or Thunderbird, are shown for visibility but disabled for automatic sending unless they expose a safe local automation API.
 
+For Office 365 shared mailboxes or delegated sending, set `SENDER_EMAIL=shared@company.com` or enter that address in the Sender Profile. When sending through classic Outlook, DeepMail Studio first tries to match that address to a configured Outlook account. If it is not a direct account, it sets Outlook's `SentOnBehalfOfName` field so the signed-in account can send on behalf of the shared mailbox. The signed-in Outlook user must already have Microsoft 365 `Send as` or `Send on behalf` permission for that mailbox.
+
 ## Agent Flow
 
 1. Upload a sheet and provide the global email context.

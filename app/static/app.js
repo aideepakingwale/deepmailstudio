@@ -118,7 +118,7 @@ function renderMailClients(defaultClientId = "") {
         els.mailClientSelect.disabled = true;
         const visibleClients = mailClients
             .filter((client) => client.installed)
-            .map((client) => `${client.name}: ${client.reason || client.detail}`)
+            .map(formatMailClientSummary)
             .join(" | ");
         els.mailClientHelp.textContent = visibleClients || "Configure SMTP or install classic Outlook with pywin32 support.";
         updateSelectedSendUi();
@@ -310,8 +310,22 @@ function updateSelectedSendUi() {
 function updateMailClientHelp() {
     const client = mailClients.find((item) => item.id === els.mailClientSelect?.value);
     if (!client || !els.mailClientHelp) return;
-    els.mailClientHelp.textContent = client.detail || "";
+    els.mailClientHelp.textContent = formatMailClientSummary(client);
     updateSelectedSendUi();
+}
+
+function formatMailClientSummary(client) {
+    const parts = [client.detail || ""];
+    if (client.account_count !== undefined && client.account_count !== null) {
+        const accounts = Array.isArray(client.accounts) && client.accounts.length
+            ? ` (${client.accounts.join(", ")})`
+            : "";
+        parts.push(`Accounts: ${client.account_count}${accounts}`);
+    }
+    if (client.reason) {
+        parts.push(client.reason);
+    }
+    return `${client.name}: ${parts.filter(Boolean).join(" · ")}`;
 }
 
 async function setBusy(button, label, action) {

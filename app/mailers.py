@@ -46,21 +46,28 @@ def detect_mail_clients() -> list[dict[str, Any]]:
     outlook_path = find_windows_app_path("OUTLOOK.EXE")
     pywin32_ready = has_pywin32()
     activation_hint = outlook_activation_hint()
+    account_status = outlook_account_status() if outlook_path and pywin32_ready and not activation_hint else {"count": None, "reason": ""}
     outlook_reason = ""
     if not pywin32_ready:
         outlook_reason = "Install pywin32 in the local environment to enable Outlook automation."
     elif activation_hint:
         outlook_reason = activation_hint
+    elif account_status.get("count") == 0:
+        outlook_reason = "Classic Outlook is installed, but its local COM profile has no sending account. Open classic Outlook on this Windows user profile and add/sign in to a mailbox, or choose SMTP sending."
+    elif account_status.get("reason"):
+        outlook_reason = account_status["reason"]
     clients.append(
         {
             "id": "outlook_classic",
             "name": "Microsoft Outlook desktop",
             "kind": "desktop",
             "installed": bool(outlook_path),
-            "can_send": bool(outlook_path and pywin32_ready and not activation_hint),
+            "can_send": bool(outlook_path and pywin32_ready and not activation_hint and account_status.get("count", 1) > 0 and not account_status.get("reason")),
             "detail": outlook_path or "Classic Outlook was not found in Windows app paths.",
             "auto_send": True,
             "reason": outlook_reason,
+            "account_count": account_status.get("count"),
+            "accounts": account_status.get("accounts", []),
         }
     )
 
@@ -100,6 +107,35 @@ def has_pywin32() -> bool:
         return True
     except Exception:
         return False
+
+
+def outlook_account_status() -> dict[str, Any]:
+    try:
+        import pythoncom
+        import win32com.client
+    except Exception:
+        return {"count": 0, "accounts": [], "reason": "pywin32 is required for Outlook desktop automation."}
+
+    pythoncom.CoInitialize()
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        session = outlook.Session
+        accounts = []
+        count = int(getattr(session.Accounts, "Count", 0) or 0)
+        for account in session.Accounts:
+            address = str(getattr(account, "SmtpAddress", "") or "").strip()
+            display_name = str(getattr(account, "DisplayName", "") or "").strip()
+            accounts.append(address or display_name)
+        return {"count": count, "accounts": accounts, "reason": ""}
+    except Exception as exc:
+        return {
+            "count": 0,
+            "accounts": [],
+            "reason": f"Classic Outlook was detected, but DeepMail Studio could not inspect its sending accounts: {format_outlook_send_error(exc)}",
+        }
+    finally:
+        pythoncom.CoUninitialize()
+
 
 def find_windows_app_path(exe_name: str) -> str:
     if not winreg:
@@ -191,19 +227,23 @@ def send_via_outlook(job: dict[str, Any], record: dict[str, Any]) -> None:
         outlook = win32com.client.Dispatch("Outlook.Application")
         session = outlook.Session
         if getattr(session.Accounts, "Count", 0) < 1:
-            raise ValueError("Outlook has no sending account configured.")
+            raise ValueError("Classic Outlook has no sending account configured for this Windows user profile. Open classic Outlook, add/sign in to a mailbox, confirm you can send a normal email manually, then refresh DeepMail Studio. If this machine only uses New Outlook, use SMTP because New Outlook does not expose the classic COM send API.")
         mail = outlook.CreateItem(0)
         mail.To = record["emailid"]
         mail.CC = ", ".join(parse_email_list(record.get("cc", "")))
         mail.BCC = ", ".join(parse_email_list(record.get("bcc", "")))
         mail.Subject = record["subject"]
         mail.HTMLBody = record["body_html"]
-        from_account = build_smtp_config(job.get("smtp", {}), include_password=False).get("from_email")
-        if from_account:
+        sender_email = outlook_sender_email(job)
+        if sender_email:
+            account_matched = False
             for account in session.Accounts:
-                if str(account.SmtpAddress).lower() == from_account.lower():
+                if str(getattr(account, "SmtpAddress", "") or "").lower() == sender_email.lower():
                     mail.SendUsingAccount = account
+                    account_matched = True
                     break
+            if not account_matched:
+                mail.SentOnBehalfOfName = sender_email
         for attachment in attachment_paths(record):
             if not attachment.exists():
                 raise ValueError(f"Attachment not found: {attachment}")
@@ -213,11 +253,18 @@ def send_via_outlook(job: dict[str, Any], record: dict[str, Any]) -> None:
         try:
             mail.Send()
         except Exception as exc:
-            raise RuntimeError(format_outlook_send_error(exc)) from exc
+            raise RuntimeError(format_outlook_send_error(exc, sender_email)) from exc
     finally:
         pythoncom.CoUninitialize()
 
-def format_outlook_send_error(exc: Exception) -> str:
+
+def outlook_sender_email(job: dict[str, Any]) -> str:
+    sender = get_sender_config(job)
+    smtp_config = build_smtp_config(job.get("smtp", {}), include_password=False)
+    return (sender.get("email") or smtp_config.get("from_email") or "").strip()
+
+
+def format_outlook_send_error(exc: Exception, delegated_sender: str = "") -> str:
     message = str(exc)
     if "-2147467260" in message or "Operation aborted" in message:
         advice = "Outlook aborted the send operation."
@@ -226,6 +273,12 @@ def format_outlook_send_error(exc: Exception) -> str:
             advice += f" {activation_hint}"
         advice += " Open Outlook, confirm the mailbox can manually send a normal email, then retry. SMTP sending is the best fallback when Outlook blocks automation."
         return advice
+    if delegated_sender and any(term in message.lower() for term in ["permission", "sentonbehalf", "send on behalf", "send as", "not recognized"]):
+        return (
+            f"Outlook could not send using {delegated_sender}. Confirm this Office 365 account has "
+            "'Send as' or 'Send on behalf' permission for that mailbox, and that the mailbox resolves in classic Outlook. "
+            f"Original Outlook error: {message}"
+        )
     return message
 
 def outlook_activation_hint() -> str:
