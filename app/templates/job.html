@@ -18,10 +18,9 @@
     <aside class="recipients-panel">
         <div class="panel-head">
             <div>
-                <h2>Recipients</h2>
-                <p>{{ job.records|length }} total rows</p>
+                <h2>Recipients <span class="recipient-count">{{ job.records|length }} rows</span></h2>
             </div>
-            <button id="refreshBtn" class="icon-btn" title="Refresh">R</button>
+            <button id="refreshBtn" class="icon-btn" title="Refresh recipients" aria-label="Refresh recipients">&#8635;</button>
         </div>
         <div class="status-strip">
             <span><b id="countPending">0</b> pending</span>
@@ -43,10 +42,19 @@
                 <strong>Approved Send Queue</strong>
                 <span id="selectedSendCount">0 selected</span>
             </div>
-            <select id="mailClientSelect">
-                <option value="">Detecting mail clients...</option>
-            </select>
-            <div id="mailClientHelp" class="bulk-help"></div>
+            <div class="mail-client-row">
+                <select id="mailClientSelect">
+                    <option value="">Detecting mail clients...</option>
+                </select>
+                <button id="mailClientInfoBtn" class="info-icon" type="button" title="Mail client details" aria-expanded="false" aria-controls="mailClientPopover">i</button>
+            </div>
+            <div id="mailClientPopover" class="mail-client-popover hidden" role="dialog" aria-label="Mail client details">
+                <div class="popover-head">
+                    <strong>Mail client details</strong>
+                    <button id="mailClientPopoverClose" type="button">Close</button>
+                </div>
+                <div id="mailClientHelp" class="bulk-help"></div>
+            </div>
             <div class="bulk-actions">
                 <button id="selectApprovedBtn" type="button">Select Approved</button>
                 <button id="sendSelectedBtn" type="button" class="danger-soft">Send Selected</button>
@@ -67,99 +75,6 @@
     </aside>
 
     <section class="review-panel">
-        <details class="context-card settings-drawer">
-            <summary>
-                <span>
-                    <strong>Campaign Settings</strong>
-                    <small>Context, brand, and sender controls</small>
-                </span>
-            </summary>
-            <div class="settings-body">
-            <textarea id="jobContextInput" rows="4">{{ job.context_prompt or "" }}</textarea>
-            <label class="checkbox-label compact">
-                <input id="useRowPromptsInput" type="checkbox" {% if job.use_row_prompts %}checked{% endif %}>
-                Use row-level Content Prompt overrides from the sheet
-            </label>
-            {% set brand = job.brand if job.brand is defined and job.brand else {} %}
-            <details class="brand-settings">
-                <summary>Brand Studio</summary>
-                <div class="form-grid">
-                    <label>
-                        Brand / Sender Name
-                        <input id="brandNameInput" value="{{ brand.name or '' }}">
-                    </label>
-                    <label>
-                        Brand Voice
-                        <input id="brandVoiceInput" value="{{ brand.voice or '' }}">
-                    </label>
-                    <label>
-                        Primary Color
-                        <input id="brandPrimaryInput" type="color" value="{{ brand.primary_color or '#0798bc' }}">
-                    </label>
-                    <label>
-                        Accent Color
-                        <input id="brandAccentInput" type="color" value="{{ brand.accent_color or '#49c7df' }}">
-                    </label>
-                    <label>
-                        Logo URL or Public Image Path
-                        <input id="brandLogoInput" value="{{ brand.logo_url or '' }}">
-                    </label>
-                    <label>
-                        Layout Style
-                        <input id="brandLayoutInput" value="{{ brand.layout or 'modern branded invitation' }}">
-                    </label>
-                    <label>
-                        CTA Text
-                        <input id="brandCtaTextInput" value="{{ brand.cta_text or '' }}">
-                    </label>
-                    <label>
-                        CTA URL
-                        <input id="brandCtaUrlInput" value="{{ brand.cta_url or '' }}">
-                    </label>
-                </div>
-                <label>
-                    Footer Text
-                    <input id="brandFooterInput" value="{{ brand.footer or '' }}">
-                </label>
-            </details>
-            {% set sender = sender_defaults if sender_defaults is defined else (job.sender if job.sender is defined and job.sender else {}) %}
-            <details class="brand-settings">
-                <summary>Sender Profile</summary>
-                <div class="form-grid">
-                    <label>
-                        Sender Name
-                        <input id="senderNameInput" value="{{ sender.name or '' }}">
-                    </label>
-                    <label>
-                        Sender Email
-                        <input id="senderEmailInput" value="{{ sender.email or '' }}">
-                    </label>
-                    <label>
-                        Title / Role
-                        <input id="senderTitleInput" value="{{ sender.title or '' }}">
-                    </label>
-                    <label>
-                        Organization
-                        <input id="senderOrganizationInput" value="{{ sender.organization or '' }}">
-                    </label>
-                    <label>
-                        Phone
-                        <input id="senderPhoneInput" value="{{ sender.phone or '' }}">
-                    </label>
-                    <label>
-                        Website
-                        <input id="senderWebsiteInput" value="{{ sender.website or '' }}">
-                    </label>
-                </div>
-                <label>
-                    Signature
-                    <textarea id="senderSignatureInput" rows="6">{{ sender.signature_html or '' }}</textarea>
-                </label>
-            </details>
-            <button id="saveContextBtn">Save Context Settings</button>
-            </div>
-        </details>
-
         <div id="emptyState" class="empty-state">
             <h2>Select a recipient</h2>
             <p>Choose a row from the left to generate, review, approve, draft, or send.</p>
@@ -168,34 +83,36 @@
         <article id="editorState" class="editor-state hidden">
             <div class="recipient-summary">
                 <div>
-                    <h2 id="recipientName"></h2>
+                    <div class="recipient-title">
+                        <h2 id="recipientName"></h2>
+                        <span id="statusBadge" class="badge"></span>
+                    </div>
                     <p id="recipientMeta"></p>
                 </div>
-                <span id="statusBadge" class="badge"></span>
             </div>
 
             <div id="errorBox" class="alert danger hidden"></div>
             <div id="notesBox" class="alert neutral hidden"></div>
 
             <div class="toolbar">
-                <button id="generateBtn" title="Generate or regenerate">Generate</button>
+                <button id="generateBtn" class="tool-icon tool-primary" title="Generate or regenerate" aria-label="Generate or regenerate">&#9889;</button>
                 <select id="formatBlockSelect" title="Text style">
-                    <option value="P">Paragraph</option>
-                    <option value="H2">Heading</option>
-                    <option value="H3">Subheading</option>
-                    <option value="BLOCKQUOTE">Quote</option>
+                    <option value="P">&#182;</option>
+                    <option value="H2">H2</option>
+                    <option value="H3">H3</option>
+                    <option value="BLOCKQUOTE">&#10077;</option>
                 </select>
-                <button data-command="bold" title="Bold"><b>B</b></button>
-                <button data-command="italic" title="Italic"><i>I</i></button>
-                <button data-command="insertUnorderedList" title="Bulleted list">List</button>
+                <button data-command="bold" class="tool-icon" title="Bold" aria-label="Bold"><b>B</b></button>
+                <button data-command="italic" class="tool-icon" title="Italic" aria-label="Italic"><i>I</i></button>
+                <button data-command="insertUnorderedList" class="tool-icon" title="Bulleted list" aria-label="Bulleted list">&#8226;&#8226;</button>
                 <input id="textColorInput" type="color" value="#166a5f" title="Text color">
-                <button id="linkBtn" title="Insert link">Link</button>
-                <button id="ctaBtn" title="Insert CTA button">CTA</button>
-                <button id="dividerBtn" title="Insert divider">Line</button>
-                <button id="htmlSourceBtn" title="Edit HTML source">HTML</button>
-                <button id="approveBtn" class="success">Approve</button>
-                <button id="draftBtn" title="Create .eml draft">Draft</button>
-                <button id="sendBtn" class="danger-soft" title="Send through SMTP">Send</button>
+                <button id="linkBtn" class="tool-icon" title="Insert link" aria-label="Insert link">&#128279;</button>
+                <button id="ctaBtn" class="tool-icon" title="Insert CTA button" aria-label="Insert CTA button">&#8599;</button>
+                <button id="dividerBtn" class="tool-icon" title="Insert divider" aria-label="Insert divider">&#9472;</button>
+                <button id="htmlSourceBtn" class="tool-icon" title="Edit HTML source" aria-label="Edit HTML source">&lt;/&gt;</button>
+                <button id="approveBtn" class="success tool-icon" title="Approve" aria-label="Approve">&#10003;</button>
+                <button id="draftBtn" class="tool-icon" title="Create .eml draft" aria-label="Create .eml draft">&#9998;</button>
+                <button id="sendBtn" class="danger-soft tool-icon" title="Send through SMTP" aria-label="Send through SMTP">&#8594;</button>
             </div>
 
             <label>
@@ -214,8 +131,8 @@
                     <textarea id="htmlSourceInput" rows="12"></textarea>
                 </label>
                 <div class="toolbar">
-                    <button id="loadHtmlBtn">Load From Editor</button>
-                    <button id="applyHtmlBtn">Apply HTML</button>
+                    <button id="loadHtmlBtn" class="tool-icon tool-primary" title="Load from editor" aria-label="Load from editor">&#8635;</button>
+                    <button id="applyHtmlBtn" class="tool-icon success" title="Apply HTML" aria-label="Apply HTML">&#10003;</button>
                 </div>
             </div>
 
@@ -245,5 +162,5 @@
     </section>
 </section>
 
-<script src="{{ url_for('static', filename='app.js') }}?v=20260516-sender"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=20260517-workbench-icons"></script>
 {% endblock %}

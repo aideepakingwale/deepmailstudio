@@ -62,6 +62,9 @@ const els = {
     selectedSendCount: document.getElementById("selectedSendCount"),
     mailClientSelect: document.getElementById("mailClientSelect"),
     mailClientHelp: document.getElementById("mailClientHelp"),
+    mailClientInfoBtn: document.getElementById("mailClientInfoBtn"),
+    mailClientPopover: document.getElementById("mailClientPopover"),
+    mailClientPopoverClose: document.getElementById("mailClientPopoverClose"),
     selectApprovedBtn: document.getElementById("selectApprovedBtn"),
     sendSelectedBtn: document.getElementById("sendSelectedBtn"),
     detailEmail: document.getElementById("detailEmail"),
@@ -121,6 +124,7 @@ function renderMailClients(defaultClientId = "") {
             .map(formatMailClientSummary)
             .join(" | ");
         els.mailClientHelp.textContent = visibleClients || "Configure SMTP or install classic Outlook with pywin32 support.";
+        els.mailClientInfoBtn?.classList.toggle("has-info", Boolean(els.mailClientHelp.textContent.trim()));
         updateSelectedSendUi();
         return;
     }
@@ -185,12 +189,14 @@ function renderRecipientList() {
         button.innerHTML = `
             <span class="recipient-line">
                 <input class="send-check" type="checkbox" data-record-id="${escapeAttribute(record.id)}" ${selectedForSend.has(record.id) ? "checked" : ""} ${canSelectForSend ? "" : "disabled"} title="Select approved email for bulk sending">
-                <span>
-                    <strong>${escapeHtml(displayName(record))}</strong>
+                <span class="recipient-copy">
+                    <span class="recipient-title-row">
+                        <strong>${escapeHtml(displayName(record))}</strong>
+                        <span class="mini-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
+                    </span>
                     <small>${escapeHtml(record.emailid || "No email")}</small>
                 </span>
             </span>
-            <span class="mini-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
         `;
         button.addEventListener("click", () => {
             selectedId = record.id;
@@ -238,7 +244,11 @@ function renderSelected() {
     els.detailGeneration.textContent = generationSummary(record);
 
     const activeGeneration = ["queued", "generating"].includes(record.status);
-    els.generateBtn.textContent = activeGeneration ? "Working..." : (record.subject || record.body_html ? "Regen" : "Generate");
+    els.generateBtn.textContent = activeGeneration ? "\u21bb" : "\u26a1";
+    els.generateBtn.title = activeGeneration
+        ? "Generation is running"
+        : (record.subject || record.body_html ? "Regenerate email" : "Generate email");
+    els.generateBtn.setAttribute("aria-label", els.generateBtn.title);
     els.generateBtn.disabled = record.status === "invalid" || activeGeneration;
     els.approveBtn.disabled = record.status === "invalid" || record.status === "sent";
     els.draftBtn.disabled = record.status === "invalid" || record.status === "sent";
@@ -311,7 +321,14 @@ function updateMailClientHelp() {
     const client = mailClients.find((item) => item.id === els.mailClientSelect?.value);
     if (!client || !els.mailClientHelp) return;
     els.mailClientHelp.textContent = formatMailClientSummary(client);
+    els.mailClientInfoBtn?.classList.toggle("has-info", Boolean(els.mailClientHelp.textContent.trim()));
     updateSelectedSendUi();
+}
+
+function setMailClientPopover(open) {
+    if (!els.mailClientPopover || !els.mailClientInfoBtn) return;
+    els.mailClientPopover.classList.toggle("hidden", !open);
+    els.mailClientInfoBtn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 
 function formatMailClientSummary(client) {
@@ -330,15 +347,24 @@ function formatMailClientSummary(client) {
 
 async function setBusy(button, label, action) {
     const original = button.textContent;
+    const originalTitle = button.getAttribute("title");
+    const originalAria = button.getAttribute("aria-label");
+    const isIconButton = button.classList.contains("tool-icon");
     button.disabled = true;
     button.classList.add("busy");
-    button.textContent = label;
+    button.textContent = isIconButton ? "..." : label;
+    if (isIconButton) {
+        button.setAttribute("title", label);
+        button.setAttribute("aria-label", label);
+    }
     try {
         await action();
     } catch (error) {
         showBox(els.errorBox, error.message);
     } finally {
         button.textContent = original;
+        if (originalTitle) button.setAttribute("title", originalTitle);
+        if (originalAria) button.setAttribute("aria-label", originalAria);
         button.disabled = false;
         button.classList.remove("busy");
         updateSelectedSendUi();
@@ -362,6 +388,16 @@ async function persistReview(approved = false) {
 els.refreshBtn?.addEventListener("click", loadJob);
 els.refreshEventsBtn?.addEventListener("click", loadEvents);
 els.mailClientSelect?.addEventListener("change", updateMailClientHelp);
+els.mailClientInfoBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setMailClientPopover(els.mailClientPopover?.classList.contains("hidden"));
+});
+els.mailClientPopoverClose?.addEventListener("click", () => setMailClientPopover(false));
+document.addEventListener("click", (event) => {
+    if (!els.mailClientPopover || els.mailClientPopover.classList.contains("hidden")) return;
+    if (els.mailClientPopover.contains(event.target) || els.mailClientInfoBtn?.contains(event.target)) return;
+    setMailClientPopover(false);
+});
 
 els.selectApprovedBtn?.addEventListener("click", () => {
     selectedForSend = new Set(job.records.filter(canBulkSend).map((record) => record.id));

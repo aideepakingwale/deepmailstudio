@@ -95,12 +95,14 @@ function renderVerifyList() {
         button.innerHTML = `
             <span class="recipient-line">
                 <span class="verify-dot ${isVerified ? "done" : record.status === "invalid" ? "invalid" : ""}"></span>
-                <span>
-                    <strong>${escapeHtml(verifyDisplayName(record))}</strong>
+                <span class="recipient-copy">
+                    <span class="recipient-title-row">
+                        <strong>${escapeHtml(verifyDisplayName(record))}</strong>
+                        <span class="mini-status ${escapeHtml(record.status)}">${isVerified ? "verified" : escapeHtml(record.status)}</span>
+                    </span>
                     <small>${escapeHtml(record.emailid || "No email")}</small>
                 </span>
             </span>
-            <span class="mini-status ${escapeHtml(record.status)}">${isVerified ? "verified" : escapeHtml(record.status)}</span>
         `;
         button.addEventListener("click", () => {
             verifySelectedId = record.id;
@@ -131,7 +133,7 @@ function renderVerifySelected() {
     v.promptModeHelp.textContent = promptModeText[v.promptMode.value] || promptModeText.append;
     v.promptEditor.innerText = record.content_prompt || "";
     showVerifyBox(v.error, (record.errors || []).join(" "));
-    showVerifyBox(v.notes, record.status === "invalid" ? "Fix the highlighted row before continuing." : "Review the sheet values, adjust prompt handling, then save or mark verified.");
+    showVerifyBox(v.notes, "");
 }
 
 function currentVerifyRecord() {
