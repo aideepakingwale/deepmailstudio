@@ -109,6 +109,12 @@ SMTP_SECURITY=starttls
 
 Use an existing mailbox/free SMTP provider so there is no extra operating cost. Free providers have daily/hourly sending limits, so start with small batches. If SMTP is not configured, use **Create Draft**. The app writes `.eml` files into the `drafts` folder, which can be opened in desktop email clients.
 
+## Local Email Client Sending
+
+DeepMail Studio detects local desktop mail clients from Windows app paths. Automatic local-client sending is supported for classic Microsoft Outlook through COM automation. SMTP remains available as a mailbox-based automatic sending option when configured.
+
+The campaign workbench can send the currently reviewed approved email, select all approved rows, or send selected approved/drafted rows in one go. Other detected clients, such as New Outlook or Thunderbird, are shown for visibility but disabled for automatic sending unless they expose a safe local automation API.
+
 ## Agent Flow
 
 1. Upload a sheet and provide the global email context.
@@ -116,7 +122,7 @@ Use an existing mailbox/free SMTP provider so there is no extra operating cost. 
 3. By default, the agent auto-starts generation for all valid rows. You can turn this off before creating the job.
 4. Review and edit the generated subject/body in the WYSIWYG editor.
 5. Click **Approve**.
-6. Click **Send SMTP** or **Create Draft**.
+6. Choose a detected sending option, then click **Send** for one email or **Send Selected** for approved selected rows. You can also create `.eml` drafts.
 7. The job state and event log are saved locally.
 
 ## Local Data

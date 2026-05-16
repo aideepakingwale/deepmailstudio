@@ -926,6 +926,68 @@ button.primary.wide {
     transition: width 0.25s ease;
 }
 
+.bulk-send-panel {
+    border-bottom: 1px solid var(--line);
+    padding: 10px 12px;
+    background: #fbfcfe;
+}
+
+.bulk-head,
+.bulk-actions,
+.recipient-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bulk-head {
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 13px;
+}
+
+.bulk-head span,
+.bulk-help {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.bulk-send-panel select {
+    min-height: 34px;
+    padding: 7px 9px;
+    margin: 0;
+}
+
+.bulk-help {
+    margin-top: 6px;
+    line-height: 1.35;
+    max-height: 48px;
+    overflow: auto;
+    overflow-wrap: anywhere;
+}
+
+.bulk-actions {
+    margin-top: 8px;
+}
+
+.bulk-actions button {
+    flex: 1;
+    min-height: 32px;
+    padding: 6px 8px;
+    font-size: 12px;
+}
+
+.recipient-line {
+    align-items: start;
+}
+
+.send-check {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+}
+
 .mini-status.generated,
 .mini-status.approved,
 .mini-status.drafted,

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import html
 import json
 import os
 import re
+import shutil
 import smtplib
 import ssl
 import threading
@@ -21,6 +23,11 @@ import pandas as pd
 import requests
 from dotenv import dotenv_values, load_dotenv
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -115,6 +122,10 @@ def create_app() -> Flask:
     def get_job_events(job_id: str):
         return jsonify({"events": read_job_events(job_id)})
 
+    @app.get("/api/mail-clients")
+    def get_mail_clients():
+        return jsonify({"clients": detect_mail_clients(), "default_client_id": default_mail_client_id()})
+
     @app.post("/api/jobs/<job_id>/records/<record_id>/generate")
     def generate_record(job_id: str, record_id: str):
         job = load_job(job_id)
@@ -155,6 +166,7 @@ def create_app() -> Flask:
         record["subject"] = str(payload.get("subject", "")).strip()
         record["body_html"] = str(payload.get("body_html", "")).strip()
         record["status"] = "approved" if payload.get("approved") else "generated"
+        clear_send_errors(record)
         record["updated_at"] = utc_now()
         append_log(job_id, record_id, record["status"], "Human review saved")
         save_job(job)
@@ -182,6 +194,7 @@ def create_app() -> Flask:
         record = find_record(job, record_id)
         payload = request.get_json(silent=True) or {}
         try:
+            clear_send_errors(record)
             smtp_config = build_smtp_config({**job.get("smtp", {}), **payload.get("smtp", {})})
             send_email(job, record, smtp_config)
             record["status"] = "sent"
@@ -193,6 +206,21 @@ def create_app() -> Flask:
         except Exception as exc:
             mark_failed(job, record, f"Send failed: {exc}")
             return jsonify({"ok": False, "error": str(exc), "record": record}), 500
+
+    @app.post("/api/jobs/<job_id>/send-selected")
+    def send_selected_records(job_id: str):
+        job = load_job(job_id)
+        payload = request.get_json(force=True)
+        record_ids = [str(record_id) for record_id in payload.get("record_ids", []) if record_id]
+        client_id = str(payload.get("client_id", "")).strip()
+        if not record_ids:
+            return jsonify({"ok": False, "error": "Select at least one approved recipient."}), 400
+        try:
+            result = send_selected_with_client(job, record_ids, client_id)
+            return jsonify({"ok": True, **result, "job": load_job(job_id)})
+        except Exception as exc:
+            append_log(job_id, "-", "bulk_send_failed", str(exc))
+            return jsonify({"ok": False, "error": str(exc), "job": load_job(job_id)}), 500
 
     @app.get("/drafts/<path:name>")
     def download_draft(name: str):
@@ -930,6 +958,258 @@ def validate_context_alignment(job: dict[str, Any], subject: str, body_html: str
     if len(unique_keywords) >= 3 and len(matched_keywords) < 2:
         return f"Generated email did not align with campaign keywords: {', '.join(unique_keywords[:6])}"
     return ""
+
+
+def detect_mail_clients() -> list[dict[str, Any]]:
+    smtp_config = build_smtp_config({}, include_password=False)
+    clients = [
+        {
+            "id": "smtp",
+            "name": "Configured SMTP mailbox",
+            "kind": "smtp",
+            "installed": bool(smtp_config.get("host")),
+            "can_send": bool(smtp_config.get("host")),
+            "detail": smtp_config.get("host") or "Configure SMTP on the campaign/home screen to enable this option.",
+            "auto_send": True,
+        }
+    ]
+
+    outlook_path = find_windows_app_path("OUTLOOK.EXE")
+    pywin32_ready = has_pywin32()
+    activation_hint = outlook_activation_hint()
+    outlook_reason = ""
+    if not pywin32_ready:
+        outlook_reason = "Install pywin32 in the local environment to enable Outlook automation."
+    elif activation_hint:
+        outlook_reason = activation_hint
+    clients.append(
+        {
+            "id": "outlook_classic",
+            "name": "Microsoft Outlook desktop",
+            "kind": "desktop",
+            "installed": bool(outlook_path),
+            "can_send": bool(outlook_path and pywin32_ready and not activation_hint),
+            "detail": outlook_path or "Classic Outlook was not found in Windows app paths.",
+            "auto_send": True,
+            "reason": outlook_reason,
+        }
+    )
+
+    for client_id, name, exe_name in [
+        ("thunderbird", "Mozilla Thunderbird", "thunderbird.exe"),
+        ("new_outlook", "New Outlook for Windows", "olk.exe"),
+        ("windows_mail", "Windows Mail", "HxOutlook.exe"),
+    ]:
+        found_path = find_windows_app_path(exe_name) or shutil.which(exe_name)
+        clients.append(
+            {
+                "id": client_id,
+                "name": name,
+                "kind": "desktop",
+                "installed": bool(found_path),
+                "can_send": False,
+                "detail": found_path or "Not detected.",
+                "auto_send": False,
+                "reason": "Detected for visibility only. This app does not expose a safe local automatic-send API to DeepMail Studio.",
+            }
+        )
+
+    return clients
+
+
+def default_mail_client_id() -> str:
+    for client in detect_mail_clients():
+        if client["id"] == "outlook_classic" and client["can_send"]:
+            return client["id"]
+    for client in detect_mail_clients():
+        if client["id"] == "smtp" and client["can_send"]:
+            return client["id"]
+    return ""
+
+
+def has_pywin32() -> bool:
+    try:
+        import win32com.client  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def find_windows_app_path(exe_name: str) -> str:
+    if not winreg:
+        return ""
+
+    registry_paths = [
+        rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}",
+        rf"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\{exe_name}",
+    ]
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for key_path in registry_paths:
+            try:
+                with winreg.OpenKey(root, key_path) as key:
+                    value, _ = winreg.QueryValueEx(key, "")
+                    if value:
+                        return str(value)
+            except OSError:
+                continue
+
+    candidates = [
+        Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps" / exe_name,
+        Path(os.getenv("ProgramFiles", "")) / "Microsoft Office" / "root" / "Office16" / exe_name,
+        Path(os.getenv("ProgramFiles(x86)", "")) / "Microsoft Office" / "root" / "Office16" / exe_name,
+        Path(os.getenv("ProgramFiles", "")) / "Mozilla Thunderbird" / exe_name,
+        Path(os.getenv("ProgramFiles(x86)", "")) / "Mozilla Thunderbird" / exe_name,
+    ]
+    for candidate in candidates:
+        if str(candidate) and candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def send_selected_with_client(job: dict[str, Any], record_ids: list[str], client_id: str) -> dict[str, Any]:
+    clients = {client["id"]: client for client in detect_mail_clients()}
+    client = clients.get(client_id)
+    if not client:
+        raise ValueError("Choose a detected sending option.")
+    if not client.get("can_send"):
+        reason = client.get("reason") or "The selected client cannot be controlled for automatic sending."
+        raise ValueError(f"{client['name']} is not available for automatic sending. {reason}")
+
+    selected_records = [find_record(job, record_id) for record_id in record_ids]
+    blocked = [
+        display_recipient(record)
+        for record in selected_records
+        if record.get("status") not in {"approved", "drafted"}
+    ]
+    if blocked:
+        raise ValueError("Only approved or drafted emails can be bulk sent. Review these rows first: " + ", ".join(blocked))
+
+    sent: list[str] = []
+    failed: list[dict[str, str]] = []
+    for record in selected_records:
+        try:
+            clear_send_errors(record)
+            if client_id == "smtp":
+                send_email(job, record, build_smtp_config(job.get("smtp", {})))
+            elif client_id == "outlook_classic":
+                send_via_outlook(job, record)
+            else:
+                raise ValueError(f"{client['name']} automatic sending is not implemented.")
+            record["status"] = "sent"
+            record["sent_at"] = utc_now()
+            record["sent_via"] = client["name"]
+            record["updated_at"] = utc_now()
+            append_log(job["id"], record["id"], "sent", f"Sent to {record['emailid']} via {client['name']}")
+            sent.append(record["id"])
+        except Exception as exc:
+            clear_send_errors(record)
+            record.setdefault("errors", []).append(f"Send failed via {client['name']}: {exc}")
+            record["updated_at"] = utc_now()
+            failed.append({"record_id": record["id"], "recipient": display_recipient(record), "error": str(exc)})
+            append_log(job["id"], record["id"], "send_failed", f"{client['name']}: {exc}")
+
+    save_job(job)
+    if failed and not sent:
+        raise ValueError("; ".join(f"{item['recipient']}: {item['error']}" for item in failed))
+    return {"sent": sent, "failed": failed, "client": client}
+
+
+def send_via_outlook(job: dict[str, Any], record: dict[str, Any]) -> None:
+    try:
+        import pythoncom
+        import win32com.client
+    except Exception as exc:
+        raise ValueError("pywin32 is required for Outlook desktop automation.") from exc
+
+    build_email_message(job, record)
+    pythoncom.CoInitialize()
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        session = outlook.Session
+        if getattr(session.Accounts, "Count", 0) < 1:
+            raise ValueError("Outlook has no sending account configured.")
+        mail = outlook.CreateItem(0)
+        mail.To = record["emailid"]
+        mail.CC = ", ".join(parse_email_list(record.get("cc", "")))
+        mail.BCC = ", ".join(parse_email_list(record.get("bcc", "")))
+        mail.Subject = record["subject"]
+        mail.HTMLBody = record["body_html"]
+        from_account = build_smtp_config(job.get("smtp", {}), include_password=False).get("from_email")
+        if from_account:
+            for account in session.Accounts:
+                if str(account.SmtpAddress).lower() == from_account.lower():
+                    mail.SendUsingAccount = account
+                    break
+        for attachment in attachment_paths(record):
+            if not attachment.exists():
+                raise ValueError(f"Attachment not found: {attachment}")
+            mail.Attachments.Add(str(attachment))
+        if not mail.Recipients.ResolveAll():
+            raise ValueError("Outlook could not resolve one or more recipients.")
+        try:
+            mail.Send()
+        except Exception as exc:
+            raise RuntimeError(format_outlook_send_error(exc)) from exc
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def format_outlook_send_error(exc: Exception) -> str:
+    message = str(exc)
+    if "-2147467260" in message or "Operation aborted" in message:
+        advice = "Outlook aborted the send operation."
+        activation_hint = outlook_activation_hint()
+        if activation_hint:
+            advice += f" {activation_hint}"
+        advice += " Open Outlook, confirm the mailbox can manually send a normal email, then retry. SMTP sending is the best fallback when Outlook blocks automation."
+        return advice
+    return message
+
+
+def outlook_activation_hint() -> str:
+    for title in visible_window_titles():
+        if "outlook" in title.lower() and "activation failed" in title.lower():
+            return "The Outlook window title shows 'Product Activation Failed', so Outlook is likely blocking send until Office is activated or signed in."
+    return ""
+
+
+def visible_window_titles() -> list[str]:
+    titles: list[str] = []
+    if os.name != "nt":
+        return titles
+
+    EnumWindows = ctypes.windll.user32.EnumWindows
+    IsWindowVisible = ctypes.windll.user32.IsWindowVisible
+    GetWindowTextLengthW = ctypes.windll.user32.GetWindowTextLengthW
+    GetWindowTextW = ctypes.windll.user32.GetWindowTextW
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def callback(hwnd, _):
+        if IsWindowVisible(hwnd):
+            length = GetWindowTextLengthW(hwnd)
+            if length:
+                buffer = ctypes.create_unicode_buffer(length + 1)
+                GetWindowTextW(hwnd, buffer, length + 1)
+                if buffer.value:
+                    titles.append(buffer.value)
+        return True
+
+    EnumWindows(callback, None)
+    return titles
+
+
+def clear_send_errors(record: dict[str, Any]) -> None:
+    errors = record.get("errors") or []
+    record["errors"] = [
+        error
+        for error in errors
+        if not str(error).lower().startswith("send failed")
+    ]
+
+
+def display_recipient(record: dict[str, Any]) -> str:
+    name = " ".join([record.get("first_name", ""), record.get("surname", "")]).strip()
+    return name or record.get("emailid", "") or record.get("id", "")
 
 
 def write_eml_draft(job: dict[str, Any], record: dict[str, Any]) -> Path:

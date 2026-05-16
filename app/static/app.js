@@ -4,6 +4,8 @@ const jobId = shell?.dataset.jobId;
 let job = null;
 let selectedId = null;
 let pollTimer = null;
+let selectedForSend = new Set();
+let mailClients = [];
 
 const els = {
     recipientList: document.getElementById("recipientList"),
@@ -50,6 +52,11 @@ const els = {
     countSent: document.getElementById("countSent"),
     progressText: document.getElementById("progressText"),
     progressFill: document.getElementById("progressFill"),
+    selectedSendCount: document.getElementById("selectedSendCount"),
+    mailClientSelect: document.getElementById("mailClientSelect"),
+    mailClientHelp: document.getElementById("mailClientHelp"),
+    selectApprovedBtn: document.getElementById("selectApprovedBtn"),
+    sendSelectedBtn: document.getElementById("sendSelectedBtn"),
     detailEmail: document.getElementById("detailEmail"),
     detailCc: document.getElementById("detailCc"),
     detailBcc: document.getElementById("detailBcc"),
@@ -82,6 +89,42 @@ async function loadJob() {
     }
     render();
     loadEvents();
+}
+
+async function loadMailClients() {
+    if (!els.mailClientSelect) return;
+    try {
+        const response = await fetch("/api/mail-clients", { cache: "no-store" });
+        const payload = await response.json();
+        mailClients = payload.clients || [];
+        renderMailClients(payload.default_client_id || "");
+    } catch (error) {
+        els.mailClientSelect.innerHTML = '<option value="">Mail client detection failed</option>';
+        els.mailClientHelp.textContent = error.message;
+    }
+}
+
+function renderMailClients(defaultClientId = "") {
+    const sendable = mailClients.filter((client) => client.can_send);
+    if (!sendable.length) {
+        els.mailClientSelect.innerHTML = '<option value="">No automatic sender detected</option>';
+        els.mailClientSelect.disabled = true;
+        els.sendSelectedBtn.disabled = true;
+        const visibleClients = mailClients
+            .filter((client) => client.installed)
+            .map((client) => `${client.name}: ${client.reason || client.detail}`)
+            .join(" | ");
+        els.mailClientHelp.textContent = visibleClients || "Configure SMTP or install classic Outlook with pywin32 support.";
+        return;
+    }
+    els.mailClientSelect.disabled = false;
+    els.mailClientSelect.innerHTML = sendable
+        .map((client) => `<option value="${escapeAttribute(client.id)}">${escapeHtml(client.name)}</option>`)
+        .join("");
+    els.mailClientSelect.value = defaultClientId && sendable.some((client) => client.id === defaultClientId)
+        ? defaultClientId
+        : sendable[0].id;
+    updateMailClientHelp();
 }
 
 async function loadEvents() {
@@ -122,6 +165,8 @@ function renderCounts() {
     const percent = job.records.length ? Math.round((completed / job.records.length) * 100) : 0;
     if (els.progressText) els.progressText.textContent = `${percent}%`;
     if (els.progressFill) els.progressFill.style.width = `${percent}%`;
+    syncSelectedForSend();
+    updateSelectedSendUi();
 }
 
 function renderRecipientList() {
@@ -129,14 +174,27 @@ function renderRecipientList() {
     job.records.forEach((record) => {
         const button = document.createElement("button");
         button.className = `recipient-item ${record.id === selectedId ? "active" : ""}`;
+        const canSelectForSend = canBulkSend(record);
         button.innerHTML = `
-            <strong>${escapeHtml(displayName(record))}</strong>
-            <small>${escapeHtml(record.emailid || "No email")}</small>
+            <span class="recipient-line">
+                <input class="send-check" type="checkbox" data-record-id="${escapeAttribute(record.id)}" ${selectedForSend.has(record.id) ? "checked" : ""} ${canSelectForSend ? "" : "disabled"} title="Select approved email for bulk sending">
+                <span>
+                    <strong>${escapeHtml(displayName(record))}</strong>
+                    <small>${escapeHtml(record.emailid || "No email")}</small>
+                </span>
+            </span>
             <span class="mini-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
         `;
         button.addEventListener("click", () => {
             selectedId = record.id;
             render();
+        });
+        const checkbox = button.querySelector(".send-check");
+        checkbox?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (checkbox.checked) selectedForSend.add(record.id);
+            else selectedForSend.delete(record.id);
+            updateSelectedSendUi();
         });
         els.recipientList.appendChild(button);
     });
@@ -221,6 +279,31 @@ function updatePolling() {
     }
 }
 
+function canBulkSend(record) {
+    return ["approved", "drafted"].includes(record.status);
+}
+
+function syncSelectedForSend() {
+    const validIds = new Set((job?.records || []).filter(canBulkSend).map((record) => record.id));
+    selectedForSend = new Set([...selectedForSend].filter((recordId) => validIds.has(recordId)));
+}
+
+function updateSelectedSendUi() {
+    if (els.selectedSendCount) {
+        els.selectedSendCount.textContent = `${selectedForSend.size} selected`;
+    }
+    if (els.sendSelectedBtn) {
+        els.sendSelectedBtn.disabled = selectedForSend.size === 0 || !els.mailClientSelect?.value;
+    }
+}
+
+function updateMailClientHelp() {
+    const client = mailClients.find((item) => item.id === els.mailClientSelect?.value);
+    if (!client || !els.mailClientHelp) return;
+    els.mailClientHelp.textContent = client.detail || "";
+    updateSelectedSendUi();
+}
+
 async function setBusy(button, label, action) {
     const original = button.textContent;
     button.disabled = true;
@@ -251,6 +334,31 @@ async function persistReview(approved = false) {
 
 els.refreshBtn?.addEventListener("click", loadJob);
 els.refreshEventsBtn?.addEventListener("click", loadEvents);
+els.mailClientSelect?.addEventListener("change", updateMailClientHelp);
+
+els.selectApprovedBtn?.addEventListener("click", () => {
+    selectedForSend = new Set(job.records.filter(canBulkSend).map((record) => record.id));
+    renderRecipientList();
+    updateSelectedSendUi();
+});
+
+els.sendSelectedBtn?.addEventListener("click", () => setBusy(els.sendSelectedBtn, "Sending...", async () => {
+    const client = mailClients.find((item) => item.id === els.mailClientSelect.value);
+    if (!client) throw new Error("Choose a sending client first.");
+    const ok = confirm(`Send ${selectedForSend.size} approved email(s) now using ${client.name}?`);
+    if (!ok) return;
+    const result = await api(`/api/jobs/${jobId}/send-selected`, {
+        method: "POST",
+        body: JSON.stringify({
+            record_ids: [...selectedForSend],
+            client_id: client.id,
+        }),
+    });
+    selectedForSend.clear();
+    await loadJob();
+    const failed = result.failed?.length || 0;
+    showBox(els.notesBox, `Bulk send completed via ${client.name}. Sent: ${result.sent.length}. Failed: ${failed}.`);
+}));
 
 els.saveContextBtn?.addEventListener("click", () => setBusy(els.saveContextBtn, "Saving...", async () => {
     await api(`/api/jobs/${jobId}/context`, {
@@ -287,13 +395,18 @@ els.draftBtn?.addEventListener("click", () => setBusy(els.draftBtn, "Drafting...
 }));
 
 els.sendBtn?.addEventListener("click", () => setBusy(els.sendBtn, "Sending...", async () => {
-    const ok = confirm("Send this email now using the configured SMTP settings?");
+    const client = mailClients.find((item) => item.id === els.mailClientSelect?.value);
+    if (!client) throw new Error("Choose a sending client first.");
+    const ok = confirm(`Approve and send this email now using ${client.name}?`);
     if (!ok) return;
     await persistReview(true);
     const record = currentRecord();
-    await api(`/api/jobs/${jobId}/records/${record.id}/send`, {
+    await api(`/api/jobs/${jobId}/send-selected`, {
         method: "POST",
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+            record_ids: [record.id],
+            client_id: client.id,
+        }),
     });
     await loadJob();
 }));
@@ -375,4 +488,5 @@ function escapeAttribute(value) {
 
 if (jobId) {
     loadJob();
+    loadMailClients();
 }

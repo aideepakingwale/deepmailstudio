@@ -37,6 +37,20 @@
             </div>
             <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
         </div>
+        <div class="bulk-send-panel">
+            <div class="bulk-head">
+                <strong>Approved Send Queue</strong>
+                <span id="selectedSendCount">0 selected</span>
+            </div>
+            <select id="mailClientSelect">
+                <option value="">Detecting mail clients...</option>
+            </select>
+            <div id="mailClientHelp" class="bulk-help"></div>
+            <div class="bulk-actions">
+                <button id="selectApprovedBtn" type="button">Select Approved</button>
+                <button id="sendSelectedBtn" type="button" class="danger-soft">Send Selected</button>
+            </div>
+        </div>
         <div id="recipientList" class="recipient-list"></div>
         <details class="fallback-actions">
             <summary>Direct Generate</summary>
@@ -196,5 +210,5 @@
     </section>
 </section>
 
-<script src="{{ url_for('static', filename='app.js') }}?v=20260516-space2"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=20260516-send2"></script>
 {% endblock %}
