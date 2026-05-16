@@ -1,0 +1,4 @@
+Salutation,First Name,Surname,emailid,cc,bcc,Content Prompt,Language,email Tone,Content lenghth,Attachment
+Dr,Asha,Patel,asha.patel@example.com,,,Mention that the leadership breakfast starts at 9:30 AM and ask her to join the panel.,English,official,short,
+Mr,Rohan,Sharma,rohan.sharma@example.com,,,Make it cheerful and include a warm congratulation for the new branch opening.,Hindi,friendly,medium,
+Mrs,Meera,Deshmukh,meera.deshmukh@example.com,,,Invite her family as well and keep it respectful.,Marathi,business,medium,

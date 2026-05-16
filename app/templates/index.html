@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Create Job - Local AI Mail Agent{% endblock %}
+{% block content %}
+<section class="hero-band">
+    <div>
+        <h1>Agentic bulk email, reviewed before it sends.</h1>
+        <p>Upload a recipient sheet, give the campaign context, generate individualized messages locally, approve each one, then send with an existing SMTP mailbox or export email drafts.</p>
+    </div>
+</section>
+
+<section class="ai-status">
+    <div>
+        <small>Active AI Provider</small>
+        <strong>{{ ai.provider }}</strong>
+    </div>
+    <div>
+        <small>Model</small>
+        <strong>{{ ai.active_model }}</strong>
+    </div>
+    <div>
+        <small>Endpoint</small>
+        <strong>{{ ai.active_endpoint }}</strong>
+    </div>
+    <div>
+        <small>Zero-Cost Mode</small>
+        <strong>{{ ai.zero_cost_mode }}</strong>
+    </div>
+</section>
+
+{% if error %}
+<div class="alert danger">{{ error }}</div>
+{% endif %}
+
+<section class="grid two">
+    <form class="panel" method="post" action="{{ url_for('create_job_route') }}" enctype="multipart/form-data">
+        <h2>New Campaign Job</h2>
+        <label>
+            Recipient Sheet
+            <input type="file" name="sheet" accept=".csv,.xlsx,.xls,.xlsm" required>
+        </label>
+        <label>
+            Generic Context Prompt
+            <textarea name="context_prompt" rows="8" placeholder="Example: Invite each person to our AI automation webinar on 30 May at 4 PM. Mention that the event covers local agents, email automation, and workflow governance."></textarea>
+        </label>
+        <label class="checkbox-label">
+            <input type="checkbox" name="use_row_prompts">
+            Use row-level Content Prompt overrides from the sheet
+        </label>
+
+        <div class="divider"></div>
+        <h3>SMTP Defaults</h3>
+        <div class="form-grid">
+            <label>
+                Host
+                <input name="smtp_host" value="{{ defaults.host }}" placeholder="smtp.gmail.com">
+            </label>
+            <label>
+                Port
+                <input name="smtp_port" value="{{ defaults.port }}" placeholder="587">
+            </label>
+            <label>
+                Username
+                <input name="smtp_username" value="{{ defaults.username }}" autocomplete="username">
+            </label>
+            <label>
+                Password
+                <input name="smtp_password" type="password" autocomplete="current-password">
+            </label>
+            <label>
+                From Email
+                <input name="smtp_from_email" value="{{ defaults.from_email }}">
+            </label>
+            <label>
+                From Name
+                <input name="smtp_from_name" value="{{ defaults.from_name }}">
+            </label>
+            <label>
+                Security
+                <select name="smtp_security">
+                    <option value="starttls" {% if defaults.security == "starttls" %}selected{% endif %}>STARTTLS</option>
+                    <option value="ssl" {% if defaults.security == "ssl" %}selected{% endif %}>SSL</option>
+                    <option value="none" {% if defaults.security == "none" %}selected{% endif %}>None</option>
+                </select>
+            </label>
+        </div>
+        <button class="primary" type="submit">Create Local Agent Job</button>
+    </form>
+
+    <aside class="panel">
+        <h2>How The Agent Works</h2>
+        <ol class="steps">
+            <li>Reads and validates every row in your Excel or CSV sheet.</li>
+            <li>Combines global context with row-level tone, language, length, and override prompt.</li>
+            <li>Generates a personalized HTML email body with local models or free-tier AI providers.</li>
+            <li>Pauses for human review in the editor before sending.</li>
+            <li>Adds attachments, sends through SMTP, or creates a local `.eml` draft.</li>
+        </ol>
+        <div class="callout">
+            Zero-cost mode is enabled from <code>.env</code>. Use <code>AI_PROVIDER=template</code>, <code>ollama</code>, <code>lmstudio</code>, <code>groq</code>, <code>gemini</code>, or local <code>openai_compatible</code>. Row prompts are off by default to avoid accidental sample-data contamination.
+        </div>
+    </aside>
+</section>
+
+{% if jobs %}
+<section class="panel">
+    <h2>Recent Jobs</h2>
+    <div class="job-list">
+        {% for job in jobs %}
+        <a class="job-row" href="{{ url_for('job_view', job_id=job.id) }}">
+            <span><strong>{{ job.id }}</strong><small>{{ job.created_at }}</small></span>
+            <span>{{ job.records|length }} recipients</span>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

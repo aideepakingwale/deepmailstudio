@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }} - Local AI Mail Agent{% endblock %}
+{% block content %}
+<section class="job-shell" data-job-id="{{ job.id }}">
+    <aside class="recipients-panel">
+        <div class="panel-head">
+            <div>
+                <h1>Job {{ job.id }}</h1>
+                <p>{{ job.records|length }} recipients</p>
+            </div>
+            <button id="refreshBtn" class="icon-btn" title="Refresh">R</button>
+        </div>
+        <div class="status-strip">
+            <span><b id="countPending">0</b> pending</span>
+            <span><b id="countReady">0</b> ready</span>
+            <span><b id="countSent">0</b> sent</span>
+        </div>
+        <div id="recipientList" class="recipient-list"></div>
+        <div class="fallback-actions">
+            <h2>Direct Generate</h2>
+            <p>Local models can take several minutes. The row will show queued/generating while the worker runs.</p>
+            {% for record in job.records %}
+            <form method="post" action="{{ url_for('generate_record_form', job_id=job.id, record_id=record.id) }}">
+                <button type="submit" {% if record.status in ["invalid", "queued", "generating"] %}disabled{% endif %}>
+                    {{ record.first_name }} {{ record.surname }} - {% if record.status in ["queued", "generating"] %}{{ record.status }}{% else %}Call LLM{% endif %}
+                </button>
+            </form>
+            {% endfor %}
+        </div>
+    </aside>
+
+    <section class="review-panel">
+        <div class="context-card">
+            <h2>Context Prompt</h2>
+            <textarea id="jobContextInput" rows="4">{{ job.context_prompt or "" }}</textarea>
+            <label class="checkbox-label compact">
+                <input id="useRowPromptsInput" type="checkbox" {% if job.use_row_prompts %}checked{% endif %}>
+                Use row-level Content Prompt overrides from the sheet
+            </label>
+            <button id="saveContextBtn">Save Context Settings</button>
+            <div class="ai-inline">
+                <span><b>Provider</b> {{ ai.provider }}</span>
+                <span><b>Model</b> {{ ai.active_model }}</span>
+                <span><b>Endpoint</b> {{ ai.active_endpoint }}</span>
+                <span><b>Zero-cost</b> {{ ai.zero_cost_mode }}</span>
+            </div>
+        </div>
+
+        <div id="emptyState" class="empty-state">
+            <h2>Select a recipient</h2>
+            <p>Choose a row from the left to generate, review, approve, draft, or send.</p>
+        </div>
+
+        <article id="editorState" class="editor-state hidden">
+            <div class="recipient-summary">
+                <div>
+                    <h2 id="recipientName"></h2>
+                    <p id="recipientMeta"></p>
+                </div>
+                <span id="statusBadge" class="badge"></span>
+            </div>
+
+            <div id="errorBox" class="alert danger hidden"></div>
+            <div id="notesBox" class="alert neutral hidden"></div>
+
+            <div class="toolbar">
+                <button id="generateBtn">Generate</button>
+                <button data-command="bold" title="Bold"><b>B</b></button>
+                <button data-command="italic" title="Italic"><i>I</i></button>
+                <button data-command="insertUnorderedList" title="Bulleted list">List</button>
+                <button id="approveBtn" class="success">Approve</button>
+                <button id="draftBtn">Create Draft</button>
+                <button id="sendBtn" class="danger-soft">Send SMTP</button>
+            </div>
+
+            <label>
+                Subject
+                <input id="subjectInput" class="subject-input">
+            </label>
+
+            <label>
+                Email Body
+                <div id="bodyEditor" class="wysiwyg" contenteditable="true"></div>
+            </label>
+
+            <details class="details">
+                <summary>Recipient row details</summary>
+                <dl class="row-details">
+                    <dt>Email</dt><dd id="detailEmail"></dd>
+                    <dt>CC</dt><dd id="detailCc"></dd>
+                    <dt>BCC</dt><dd id="detailBcc"></dd>
+                    <dt>Language</dt><dd id="detailLanguage"></dd>
+                    <dt>Tone</dt><dd id="detailTone"></dd>
+                    <dt>Length</dt><dd id="detailLength"></dd>
+                    <dt>Prompt Override</dt><dd id="detailPrompt"></dd>
+                    <dt>Attachments</dt><dd id="detailAttachments"></dd>
+                    <dt>Generation</dt><dd id="detailGeneration"></dd>
+                </dl>
+            </details>
+        </article>
+
+        <section class="event-panel">
+            <div class="event-head">
+                <h2>Agent Event Log</h2>
+                <button id="refreshEventsBtn">Refresh Events</button>
+            </div>
+            <div id="eventList" class="event-list"></div>
+        </section>
+    </section>
+</section>
+
+<script src="{{ url_for('static', filename='app.js') }}?v=20260515-2"></script>
+{% endblock %}
