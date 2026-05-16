@@ -783,8 +783,8 @@ def generate_with_gemini(prompt: str) -> str:
 
 
 def generate_with_amazon_q_cli(prompt: str) -> str:
-    command = get_setting("AMAZON_Q_COMMAND", "q")
-    if not shutil.which(command):
+    command = resolve_local_command(get_setting("AMAZON_Q_COMMAND", "q"), ["q.exe", "q.cmd"])
+    if not command:
         raise ValueError("Amazon Q Developer CLI was not found. Install/sign in to Amazon Q CLI or choose another AI_PROVIDER.")
     timeout = int(get_setting("AMAZON_Q_TIMEOUT_SECONDS", get_setting("AI_REQUEST_TIMEOUT_SECONDS", "600")) or "600")
     model = get_setting("AMAZON_Q_MODEL", "").strip()
@@ -796,8 +796,8 @@ def generate_with_amazon_q_cli(prompt: str) -> str:
 
 
 def generate_with_copilot_cli(prompt: str) -> str:
-    command = get_setting("COPILOT_COMMAND", "copilot")
-    if not shutil.which(command):
+    command = resolve_local_command(get_setting("COPILOT_COMMAND", "copilot"), ["copilot.exe", "copilot.cmd"])
+    if not command:
         raise ValueError("GitHub Copilot CLI was not found. Install/sign in to Copilot CLI or choose another AI_PROVIDER.")
     timeout = int(get_setting("COPILOT_TIMEOUT_SECONDS", get_setting("AI_REQUEST_TIMEOUT_SECONDS", "600")) or "600")
     model = get_setting("COPILOT_MODEL", "").strip()
@@ -805,6 +805,31 @@ def generate_with_copilot_cli(prompt: str) -> str:
     if model:
         cmd.extend(["--model", model])
     return run_local_ai_command(cmd, timeout, "GitHub Copilot CLI")
+
+
+def resolve_local_command(command: str, extra_names: list[str]) -> str:
+    if not command:
+        return ""
+    expanded = os.path.expandvars(command)
+    if Path(expanded).exists():
+        return expanded
+    found = shutil.which(command)
+    if found:
+        return found
+    search_dirs = [
+        Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links",
+        Path(os.getenv("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps",
+        Path(os.getenv("APPDATA", "")) / "npm",
+    ]
+    names = [command, *extra_names]
+    for folder in search_dirs:
+        if not str(folder) or not folder.exists():
+            continue
+        for name in names:
+            candidate = folder / name
+            if candidate.exists():
+                return str(candidate)
+    return ""
 
 
 def run_local_ai_command(cmd: list[str], timeout: int, label: str) -> str:

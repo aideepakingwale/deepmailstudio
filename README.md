@@ -109,6 +109,86 @@ COPILOT_MODEL=
 COPILOT_TIMEOUT_SECONDS=600
 ```
 
+### Install GitHub Copilot CLI
+
+Official install guide: [Installing GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli).
+
+Prerequisites:
+
+- Active GitHub Copilot access.
+- On Windows, PowerShell v6 or higher.
+
+Install on Windows with WinGet:
+
+```powershell
+winget install GitHub.Copilot
+```
+
+Alternative install with npm on any platform, requiring Node.js 22 or later:
+
+```powershell
+npm install -g @github/copilot
+```
+
+Authenticate after installation:
+
+```powershell
+copilot
+```
+
+If prompted, run `/login` inside Copilot CLI and complete the GitHub sign-in flow. Then configure DeepMail Studio with `AI_PROVIDER=copilot`.
+
+Verify non-interactive generation works:
+
+```powershell
+copilot -p "Reply with exactly: COPILOT_OK" -s --no-ask-user
+```
+
+If PowerShell cannot find `copilot` after a WinGet install, restart PowerShell or point DeepMail Studio directly to the WinGet link:
+
+```text
+COPILOT_COMMAND=%LOCALAPPDATA%\Microsoft\WinGet\Links\copilot.exe
+```
+
+### Install Amazon Q Developer CLI
+
+AWS Developer Center: [Amazon Q Developer for CLI](https://aws.amazon.com/developer/learning/q-developer-cli/).  
+Amazon Q command-line chat docs: [Using chat on the command line](https://docs.aws.amazon.com/en_us/amazonq/latest/qdeveloper-ug/command-line-chat.html).
+
+Notes:
+
+- DeepMail Studio expects the `q` command to be available in PATH.
+- AWS documentation currently notes that Q CLI has moved toward Kiro CLI in some contexts. Use the Amazon Q Developer CLI/Kiro CLI package that provides the `q` command, or set `AMAZON_Q_COMMAND` to the installed command name/path.
+- Sign in with AWS Builder ID or the authentication method supported by your installation.
+
+Install/download from the AWS Developer Center:
+
+1. Open [Amazon Q Developer for CLI](https://aws.amazon.com/developer/learning/q-developer-cli/).
+2. Download the installer for your OS.
+3. Install it and restart PowerShell/terminal so PATH is refreshed.
+4. Confirm the command is available:
+
+```powershell
+q --help
+```
+
+Start and authenticate:
+
+```powershell
+q chat
+```
+
+After sign-in works locally, configure DeepMail Studio:
+
+```text
+AI_PROVIDER=amazon_q
+AMAZON_Q_COMMAND=q
+AMAZON_Q_MODEL=
+AMAZON_Q_TIMEOUT_SECONDS=600
+```
+
+DeepMail Studio invokes Amazon Q non-interactively with `q chat --no-interactive`.
+
 Paid OpenAI API usage is intentionally disabled while `ZERO_COST_MODE=true`.
 
 ## Zero-Cost Email Sending
