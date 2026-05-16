@@ -9,6 +9,7 @@ import re
 import shutil
 import smtplib
 import ssl
+import subprocess
 import threading
 import uuid
 from dataclasses import dataclass
@@ -568,6 +569,10 @@ def generate_email(job: dict[str, Any], record: dict[str, Any]) -> tuple[str, st
             text = generate_with_groq(prompt)
         elif provider == "gemini":
             text = generate_with_gemini(prompt)
+        elif provider == "amazon_q":
+            text = generate_with_amazon_q_cli(prompt)
+        elif provider == "copilot":
+            text = generate_with_copilot_cli(prompt)
         elif provider == "openai":
             text = generate_with_openai(prompt)
         else:
@@ -775,6 +780,50 @@ def generate_with_gemini(prompt: str) -> str:
     response.raise_for_status()
     data = response.json()
     return data["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def generate_with_amazon_q_cli(prompt: str) -> str:
+    command = get_setting("AMAZON_Q_COMMAND", "q")
+    if not shutil.which(command):
+        raise ValueError("Amazon Q Developer CLI was not found. Install/sign in to Amazon Q CLI or choose another AI_PROVIDER.")
+    timeout = int(get_setting("AMAZON_Q_TIMEOUT_SECONDS", get_setting("AI_REQUEST_TIMEOUT_SECONDS", "600")) or "600")
+    model = get_setting("AMAZON_Q_MODEL", "").strip()
+    cmd = [command, "chat", "--no-interactive"]
+    if model:
+        cmd.extend(["--model", model])
+    cmd.append(prompt)
+    return run_local_ai_command(cmd, timeout, "Amazon Q Developer CLI")
+
+
+def generate_with_copilot_cli(prompt: str) -> str:
+    command = get_setting("COPILOT_COMMAND", "copilot")
+    if not shutil.which(command):
+        raise ValueError("GitHub Copilot CLI was not found. Install/sign in to Copilot CLI or choose another AI_PROVIDER.")
+    timeout = int(get_setting("COPILOT_TIMEOUT_SECONDS", get_setting("AI_REQUEST_TIMEOUT_SECONDS", "600")) or "600")
+    model = get_setting("COPILOT_MODEL", "").strip()
+    cmd = [command, "-p", prompt, "-s", "--no-ask-user"]
+    if model:
+        cmd.extend(["--model", model])
+    return run_local_ai_command(cmd, timeout, "GitHub Copilot CLI")
+
+
+def run_local_ai_command(cmd: list[str], timeout: int, label: str) -> str:
+    completed = subprocess.run(
+        cmd,
+        cwd=BASE_DIR,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    )
+    output = (completed.stdout or "").strip()
+    error = (completed.stderr or "").strip()
+    if completed.returncode != 0:
+        raise ValueError(f"{label} failed with exit code {completed.returncode}: {error or output}")
+    if not output:
+        raise ValueError(f"{label} returned empty output. {error}")
+    return output
 
 
 def generate_with_openai(prompt: str) -> str:
@@ -1481,6 +1530,8 @@ def ai_config() -> dict[str, str]:
         "openai_compatible": get_setting("OPENAI_COMPATIBLE_MODEL", "local-model"),
         "groq": get_setting("GROQ_MODEL", "llama-3.1-8b-instant"),
         "gemini": get_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+        "amazon_q": get_setting("AMAZON_Q_MODEL", "Amazon Q Developer CLI"),
+        "copilot": get_setting("COPILOT_MODEL", "GitHub Copilot CLI default"),
         "openai": get_setting("OPENAI_MODEL", ""),
     }
     endpoint_by_provider = {
@@ -1490,6 +1541,8 @@ def ai_config() -> dict[str, str]:
         "openai_compatible": get_setting("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:1234/v1"),
         "groq": "https://api.groq.com/openai/v1",
         "gemini": "https://generativelanguage.googleapis.com/v1beta",
+        "amazon_q": get_setting("AMAZON_Q_COMMAND", "q") + " chat --no-interactive",
+        "copilot": get_setting("COPILOT_COMMAND", "copilot") + " -p ... -s",
         "openai": "https://api.openai.com/v1",
     }
     return {
@@ -1503,6 +1556,8 @@ def ai_config() -> dict[str, str]:
         "openai_compatible_model": get_setting("OPENAI_COMPATIBLE_MODEL", "local-model"),
         "groq_model": get_setting("GROQ_MODEL", "llama-3.1-8b-instant"),
         "gemini_model": get_setting("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+        "amazon_q_model": get_setting("AMAZON_Q_MODEL", "Amazon Q Developer CLI"),
+        "copilot_model": get_setting("COPILOT_MODEL", "GitHub Copilot CLI default"),
     }
 
 

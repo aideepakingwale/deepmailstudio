@@ -91,6 +91,24 @@ GEMINI_API_KEY=your_gemini_key
 GEMINI_MODEL=gemini-2.5-flash-lite
 ```
 
+Amazon Q Developer CLI, using the locally signed-in CLI:
+
+```text
+AI_PROVIDER=amazon_q
+AMAZON_Q_COMMAND=q
+AMAZON_Q_MODEL=
+AMAZON_Q_TIMEOUT_SECONDS=600
+```
+
+GitHub Copilot CLI, using the locally signed-in Copilot CLI:
+
+```text
+AI_PROVIDER=copilot
+COPILOT_COMMAND=copilot
+COPILOT_MODEL=
+COPILOT_TIMEOUT_SECONDS=600
+```
+
 Paid OpenAI API usage is intentionally disabled while `ZERO_COST_MODE=true`.
 
 ## Zero-Cost Email Sending
