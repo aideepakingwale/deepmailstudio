@@ -5,7 +5,7 @@
     <div>
         <p class="eyebrow">Local AI campaign workspace</p>
         <h1>Generate, review, and send personalized HTML emails.</h1>
-        <p>Upload recipients, define the campaign and brand, then let the agent generate row-by-row drafts in the background for human approval.</p>
+        <p>Upload recipients, verify sheet data, tune per-recipient prompts, then let the agent generate row-by-row drafts for human approval.</p>
     </div>
     <div class="title-actions">
         <a class="button-secondary" href="{{ url_for('sample_sheet') }}">Download Sample Sheet</a>
@@ -58,7 +58,7 @@
         </label>
         <label class="checkbox-label">
             <input type="checkbox" name="auto_start_generation" checked>
-            Auto-start AI generation for all valid rows after upload
+            Auto-start AI generation after sheet verification
         </label>
 
         <div class="divider"></div>
@@ -111,6 +111,44 @@
         <div class="section-head compact">
             <div>
                 <p class="eyebrow">Step 3</p>
+                <h3>Sender Profile</h3>
+            </div>
+        </div>
+        <div class="form-grid">
+            <label>
+                Sender Name
+                <input name="sender_name" value="{{ defaults.from_name }}" placeholder="Example: Deepak Ingwale">
+            </label>
+            <label>
+                Sender Email
+                <input name="sender_email" value="{{ defaults.from_email }}" placeholder="you@example.com">
+            </label>
+            <label>
+                Title / Role
+                <input name="sender_title" placeholder="Founder, Project Lead, Event Coordinator">
+            </label>
+            <label>
+                Organization
+                <input name="sender_organization" placeholder="Company or team name">
+            </label>
+            <label>
+                Phone
+                <input name="sender_phone" placeholder="+44 ...">
+            </label>
+            <label>
+                Website
+                <input name="sender_website" placeholder="https://...">
+            </label>
+        </div>
+        <label>
+            Signature
+            <textarea name="sender_signature_html" rows="5" placeholder="Regards,\nYour Name\nTitle | Organization\nPhone | Website"></textarea>
+        </label>
+
+        <div class="divider"></div>
+        <div class="section-head compact">
+            <div>
+                <p class="eyebrow">Step 4</p>
                 <h3>Sending Defaults</h3>
             </div>
         </div>
@@ -148,7 +186,7 @@
                 </select>
             </label>
         </div>
-        <button class="primary wide" type="submit">Create Campaign And Queue AI Drafts</button>
+        <button class="primary wide" type="submit">Upload Sheet And Verify Recipients</button>
     </form>
 
     <aside class="side-stack">
@@ -160,10 +198,10 @@
                 </div>
             </div>
             <ol class="steps">
-                <li><span>Validate</span> Check recipients, email fields, and attachments.</li>
-                <li><span>Generate</span> Queue background AI drafts for each valid row.</li>
-                <li><span>Review</span> Edit branded HTML in the WYSIWYG studio.</li>
-                <li><span>Send</span> Create drafts or send through SMTP after approval.</li>
+                <li><span>Upload</span> Add the recipient sheet and campaign context.</li>
+                <li><span>Verify</span> Review and edit every recipient row before generation.</li>
+                <li><span>Generate</span> Queue background AI drafts for valid rows.</li>
+                <li><span>Approve</span> Edit branded HTML, approve, then send selected emails.</li>
             </ol>
         </section>
         <div class="callout">
@@ -182,9 +220,9 @@
     </div>
     <div class="job-list">
         {% for job in jobs %}
-        <a class="job-row" href="{{ url_for('job_view', job_id=job.id) }}">
+        <a class="job-row" href="{{ url_for('job_view', job_id=job.id) if job.sheet_verified is not defined or job.sheet_verified else url_for('verify_recipients_view', job_id=job.id) }}">
             <span><strong>{{ job.id }}</strong><small>{{ job.created_at }}</small></span>
-            <span>{{ job.records|length }} recipients</span>
+            <span>{{ job.records|length }} recipients{% if job.sheet_verified is defined and not job.sheet_verified %} · verify sheet{% endif %}</span>
         </a>
         {% endfor %}
     </div>

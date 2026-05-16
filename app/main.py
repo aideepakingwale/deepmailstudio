@@ -107,12 +107,17 @@ def create_app() -> Flask:
 
         context_prompt = request.form.get("context_prompt", "").strip()
         job = create_job(sheet, context_prompt, request.form)
-        return redirect(url_for("job_view", job_id=job["id"]))
+        return redirect(url_for("verify_recipients_view", job_id=job["id"]))
 
     @app.get("/jobs/<job_id>")
     def job_view(job_id: str):
         job = load_job(job_id)
-        return render_template("job.html", job=job, defaults=smtp_defaults(), ai=ai_config())
+        return render_template("job.html", job=job, defaults=smtp_defaults(), ai=ai_config(), sender_defaults=get_sender_config(job))
+
+    @app.get("/jobs/<job_id>/verify")
+    def verify_recipients_view(job_id: str):
+        job = load_job(job_id)
+        return render_template("verify.html", job=job, ai=ai_config())
 
     @app.get("/api/jobs/<job_id>")
     def get_job(job_id: str):
@@ -121,6 +126,54 @@ def create_app() -> Flask:
     @app.get("/api/jobs/<job_id>/events")
     def get_job_events(job_id: str):
         return jsonify({"events": read_job_events(job_id)})
+
+    @app.post("/api/jobs/<job_id>/records/<record_id>/config")
+    def update_record_config(job_id: str, record_id: str):
+        job = load_job(job_id)
+        record = find_record(job, record_id)
+        payload = request.get_json(force=True)
+        update_recipient_config(record, payload)
+        record["errors"] = validate_record(record)
+        if record["errors"]:
+            record["status"] = "invalid"
+            record["row_verified"] = False
+        elif record["status"] == "invalid":
+            record["status"] = "pending"
+        if not record["errors"] and payload.get("row_verified"):
+            record["row_verified"] = True
+        record["updated_at"] = utc_now()
+        append_log(job_id, record_id, "recipient_config_updated", "Recipient row reviewed/edited before generation")
+        save_job(job)
+        return jsonify({"ok": True, "record": record, "job": job})
+
+    @app.post("/api/jobs/<job_id>/verify")
+    def verify_recipients(job_id: str):
+        job = load_job(job_id)
+        payload = request.get_json(silent=True) or {}
+        auto_start = bool(payload.get("auto_start", job.get("auto_start_generation", True)))
+        invalid_count = 0
+        for record in job.get("records", []):
+            record["errors"] = validate_record(record)
+            if record["errors"]:
+                record["status"] = "invalid"
+                record["row_verified"] = False
+                invalid_count += 1
+            elif record.get("status") == "invalid":
+                record["status"] = "pending"
+            else:
+                record["row_verified"] = True
+        if invalid_count:
+            save_job(job)
+            return jsonify({"ok": False, "error": f"Fix {invalid_count} invalid row(s) before continuing.", "invalid_count": invalid_count}), 400
+        job["sheet_verified"] = True
+        job["sheet_verified_at"] = utc_now()
+        append_log(job_id, "-", "sheet_verified", f"Human verified recipient sheet; invalid rows={invalid_count}")
+        save_job(job)
+        queued = 0
+        if auto_start:
+            queued = enqueue_all_pending_records(load_job(job_id))
+            append_log(job_id, "-", "verified_auto_start_generation", f"Queued {queued} valid recipient rows after sheet verification")
+        return jsonify({"ok": True, "queued": queued, "invalid_count": invalid_count, "redirect_url": url_for("job_view", job_id=job_id)})
 
     @app.get("/api/mail-clients")
     def get_mail_clients():
@@ -154,6 +207,7 @@ def create_app() -> Flask:
         job["context_prompt"] = str(payload.get("context_prompt", "")).strip()
         job["use_row_prompts"] = bool(payload.get("use_row_prompts"))
         job["brand"] = build_brand_config(payload.get("brand", {}))
+        job["sender"] = build_sender_config(payload.get("sender", {}), job.get("smtp", {}))
         append_log(job_id, "-", "context_updated", "Campaign context/settings updated by human reviewer")
         save_job(job)
         return jsonify({"ok": True, "job": job})
@@ -251,16 +305,18 @@ def create_job(sheet_file, context_prompt: str, form: dict[str, Any]) -> dict[st
         "context_prompt": context_prompt,
         "use_row_prompts": form.get("use_row_prompts") == "on",
         "auto_start_generation": form.get("auto_start_generation", "on") == "on",
+        "sheet_verified": False,
+        "sheet_verified_at": "",
         "brand": build_brand_config(form),
         "smtp": build_smtp_config(form, include_password=True),
+        "sender": build_sender_config(form),
         "ai": ai_config(),
         "records": records,
     }
+    for record in job["records"]:
+        record["prompt_mode"] = "append" if job["use_row_prompts"] and record.get("content_prompt") else "ignore"
     save_job(job)
     append_log(job_id, "-", "created", f"Loaded {len(records)} recipient rows")
-    if job["auto_start_generation"]:
-        queued = enqueue_all_pending_records(job)
-        append_log(job_id, "-", "auto_start_generation", f"Queued {queued} valid recipient rows")
     return job
 
 
@@ -422,6 +478,7 @@ def load_records(path: Path) -> list[dict[str, Any]]:
             "cc": clean(row.get("cc", "")),
             "bcc": clean(row.get("bcc", "")),
             "content_prompt": clean(row.get("content_prompt", "")),
+            "prompt_mode": "append",
             "language": clean(row.get("language", "")) or "English",
             "email_tone": clean(row.get("email_tone", "")) or "friendly",
             "content_length": clean(row.get("content_length", "")) or "medium",
@@ -431,6 +488,7 @@ def load_records(path: Path) -> list[dict[str, Any]]:
             "quality_notes": "",
             "status": "pending",
             "errors": [],
+            "row_verified": False,
             "updated_at": "",
         }
         record["errors"] = validate_record(record)
@@ -443,6 +501,34 @@ def load_records(path: Path) -> list[dict[str, Any]]:
 def normalize_header(value: str) -> str:
     key = re.sub(r"\s+", " ", str(value).strip().lower())
     return HEADER_ALIASES.get(key, key.replace(" ", "_"))
+
+
+def update_recipient_config(record: dict[str, Any], payload: dict[str, Any]) -> None:
+    editable_fields = [
+        "salutation",
+        "first_name",
+        "surname",
+        "emailid",
+        "cc",
+        "bcc",
+        "content_prompt",
+        "language",
+        "email_tone",
+        "content_length",
+        "attachments",
+    ]
+    for field in editable_fields:
+        if field in payload:
+            record[field] = clean(payload.get(field))
+    prompt_mode = clean(payload.get("prompt_mode") or record.get("prompt_mode") or "append").lower()
+    if prompt_mode not in {"append", "enhance", "override", "ignore"}:
+        prompt_mode = "append"
+    record["prompt_mode"] = prompt_mode
+    if record.get("status") in {"generated", "approved", "drafted"}:
+        record["status"] = "pending"
+        record["subject"] = ""
+        record["body_html"] = ""
+        record["quality_notes"] = ""
 
 
 def validate_record(record: dict[str, Any]) -> list[str]:
@@ -531,9 +617,18 @@ def build_generation_prompt(job: dict[str, Any], record: dict[str, Any]) -> str:
     full_name = " ".join(part for part in [record.get("first_name"), record.get("surname")] if part)
     attachment_names = ", ".join(path.name for path in attachment_paths(record)) or "None"
     use_row_prompts = bool(job.get("use_row_prompts"))
-    row_prompt = record.get("content_prompt") if use_row_prompts else ""
-    row_prompt_label = "Recipient-specific prompt" if use_row_prompts else "Recipient-specific prompt ignored for this job"
+    prompt_mode = (record.get("prompt_mode") or ("append" if use_row_prompts else "ignore")).lower()
+    if prompt_mode not in {"append", "enhance", "override", "ignore"}:
+        prompt_mode = "append" if use_row_prompts else "ignore"
+    row_prompt = record.get("content_prompt") if prompt_mode != "ignore" else ""
+    mode_instruction = {
+        "append": "Append the recipient-specific prompt as additional instructions after applying the campaign context.",
+        "enhance": "Use the recipient-specific prompt to enrich personalization and wording while preserving the campaign context.",
+        "override": "For this recipient only, the recipient-specific prompt may override the generic campaign context where they conflict.",
+        "ignore": "Ignore the recipient-specific prompt for this recipient.",
+    }[prompt_mode]
     brand = get_brand_config(job)
+    sender = get_sender_config(job)
     language = record.get("language") or "English"
     language_instruction = language_rules(language)
     return f"""
@@ -553,6 +648,15 @@ Brand and rich HTML requirements:
 - Footer: {brand["footer"] or "None"}
 - Layout style: {brand["layout"]}
 
+Sender profile:
+- Sender name: {sender["name"] or "Not specified"}
+- Sender email: {sender["email"] or "Not specified"}
+- Sender title/role: {sender["title"] or "Not specified"}
+- Sender organization: {sender["organization"] or brand["name"] or "Not specified"}
+- Sender phone: {sender["phone"] or "Not specified"}
+- Sender website: {sender["website"] or "Not specified"}
+- Signature instruction/content: {strip_tags(sender["signature_html"]) or "Use a concise natural sign-off from the sender profile."}
+
 Recipient:
 - Salutation: {record.get("salutation") or "not specified"}
 - Name: {full_name}
@@ -561,12 +665,14 @@ Recipient:
 - Tone: {record.get("email_tone") or "friendly"}
 - Desired length: {record.get("content_length") or "medium"}
 - Attachments/images referenced: {attachment_names}
-- {row_prompt_label}: {row_prompt or "None"}
+- Recipient prompt mode: {prompt_mode}
+- Recipient-specific prompt: {row_prompt or "None"}
 
 Requirements:
 - Draft like a human wrote it for this recipient.
 - The authoritative campaign context is the main event/topic and must not be replaced.
-- Apply recipient-specific prompts only when they support the campaign context.
+- Recipient prompt handling: {mode_instruction}
+- Apply recipient-specific prompts only according to the selected prompt mode.
 - If a recipient-specific prompt conflicts with the campaign context, ignore the conflicting part unless it starts with "OVERRIDE:".
 - Produce rich, email-client-friendly HTML using inline styles.
 - Use a polished branded layout with header, body sections, key details, CTA button when CTA text is available, and footer.
@@ -577,6 +683,7 @@ Requirements:
 - {language_instruction}
 - Keep proper nouns, brand names, email addresses, URLs, and unavoidable technical terms as-is, but translate normal sentence text.
 - Include a natural greeting using salutation and first name where appropriate.
+- End with a natural sender signature using the Sender profile. If signature content is provided, use it as the authoritative sign-off/signature block.
 - Use clean HTML suitable for an email body. Use paragraphs, bullets, and bold text when useful.
 - Smileys are allowed only for friendly, funny, romantic, or casual tones. Do not use smileys for official, business, formal, angry, upset, or strict tones.
 - Avoid hallucinating facts not present in the global or recipient prompt.
@@ -759,9 +866,10 @@ def generate_template_email(job: dict[str, Any], record: dict[str, Any]) -> tupl
     salutation = record.get("salutation") or ""
     name = " ".join(part for part in [salutation, record.get("first_name")] if part).strip()
     context = job.get("context_prompt") or "I wanted to share this note with you."
-    custom = record.get("content_prompt") if job.get("use_row_prompts") else ""
+    custom = record.get("content_prompt") if record.get("prompt_mode", "append") != "ignore" else ""
     tone = record.get("email_tone", "friendly")
     brand = get_brand_config(job)
+    sender = get_sender_config(job)
     subject_base = first_sentence(context) or "A note for you"
     localized = localize_template_text(record, context, subject_base)
     subject = localized["subject"]
@@ -802,7 +910,7 @@ def generate_template_email(job: dict[str, Any], record: dict[str, Any]) -> tupl
     closing = "Warm regards" if tone.lower() not in OFFICIAL_TONES else "Regards"
     if tone.lower() in {"friendly", "funny", "casual"}:
         body_parts.append(f"<p>{html.escape(localized['friendly_line'])}</p>")
-    body_parts.append(f"<p>{html.escape(localized['closing'] if tone.lower() in OFFICIAL_TONES else closing)},<br>{html.escape(brand['name'] or get_setting('SMTP_FROM_NAME', 'DeepMail Studio'))}</p>")
+    body_parts.append(sender_signature_html(sender, localized["closing"] if tone.lower() in OFFICIAL_TONES else closing))
     body_parts.append("</div>")
     if brand["footer"]:
         body_parts.append(
@@ -1249,8 +1357,9 @@ def build_email_message(job: dict[str, Any], record: dict[str, Any], smtp_config
         raise ValueError("; ".join(record["errors"]))
 
     smtp_config = smtp_config or build_smtp_config(job.get("smtp", {}))
-    from_email = smtp_config.get("from_email") or smtp_config.get("username") or "local-agent@example.local"
-    from_name = smtp_config.get("from_name") or "DeepMail Studio"
+    sender = get_sender_config(job)
+    from_email = smtp_config.get("from_email") or sender.get("email") or smtp_config.get("username") or "local-agent@example.local"
+    from_name = smtp_config.get("from_name") or sender.get("name") or "DeepMail Studio"
 
     message = EmailMessage()
     message["Subject"] = record["subject"]
@@ -1315,6 +1424,44 @@ def build_brand_config(values: dict[str, Any]) -> dict[str, str]:
 
 def get_brand_config(job: dict[str, Any]) -> dict[str, str]:
     return build_brand_config(job.get("brand", {}))
+
+
+def build_sender_config(values: dict[str, Any], smtp_values: dict[str, Any] | None = None) -> dict[str, str]:
+    smtp_values = smtp_values or values
+    smtp_config = build_smtp_config(smtp_values, include_password=False)
+    return {
+        "name": clean(values.get("sender_name") or values.get("name") or smtp_config.get("from_name") or os.getenv("SENDER_NAME", "DeepMail Studio")),
+        "email": clean(values.get("sender_email") or values.get("email") or smtp_config.get("from_email") or os.getenv("SENDER_EMAIL", "")),
+        "title": clean(values.get("sender_title") or values.get("title") or os.getenv("SENDER_TITLE", "")),
+        "organization": clean(values.get("sender_organization") or values.get("organization") or os.getenv("SENDER_ORGANIZATION", "")),
+        "phone": clean(values.get("sender_phone") or values.get("phone") or os.getenv("SENDER_PHONE", "")),
+        "website": clean(values.get("sender_website") or values.get("website") or os.getenv("SENDER_WEBSITE", "")),
+        "signature_html": sanitize_email_html(clean(values.get("sender_signature_html") or values.get("signature_html") or os.getenv("SENDER_SIGNATURE_HTML", ""))),
+    }
+
+
+def get_sender_config(job: dict[str, Any]) -> dict[str, str]:
+    return build_sender_config(job.get("sender", {}), job.get("smtp", {}))
+
+
+def sender_signature_html(sender: dict[str, str], closing: str = "Regards") -> str:
+    if sender.get("signature_html"):
+        return sender["signature_html"]
+    lines = [html.escape(sender.get("name") or get_setting("SMTP_FROM_NAME", "DeepMail Studio"))]
+    if sender.get("title"):
+        lines.append(html.escape(sender["title"]))
+    if sender.get("organization"):
+        lines.append(html.escape(sender["organization"]))
+    contact = []
+    if sender.get("email"):
+        contact.append(html.escape(sender["email"]))
+    if sender.get("phone"):
+        contact.append(html.escape(sender["phone"]))
+    if sender.get("website"):
+        contact.append(html.escape(sender["website"]))
+    if contact:
+        lines.append(" | ".join(contact))
+    return f"<p>{html.escape(closing)},<br>{'<br>'.join(lines)}</p>"
 
 
 def smtp_defaults() -> dict[str, Any]:

@@ -247,7 +247,12 @@ button.danger-soft {
 
 button:disabled {
     opacity: 0.55;
-    cursor: wait;
+    cursor: not-allowed;
+}
+
+button.busy,
+button.busy:disabled {
+    cursor: progress;
 }
 
 .steps {
@@ -988,6 +993,166 @@ button.primary.wide {
     margin: 2px 0 0;
 }
 
+.verify-shell {
+    display: grid;
+    grid-template-columns: 340px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.verify-list-panel {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    position: sticky;
+    top: 76px;
+    max-height: calc(100vh - 92px);
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-soft);
+}
+
+.verify-progress {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.verify-editor-panel {
+    display: block;
+    min-width: 0;
+}
+
+.verify-editor {
+    min-width: 0;
+}
+
+.verify-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 14px;
+}
+
+.prompt-mode-card {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    margin: 12px 0;
+    background: #f8fafc;
+}
+
+.prompt-mode-card p {
+    margin: 6px 0 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.compact-toolbar {
+    position: static;
+    margin: 8px 0 0;
+    box-shadow: none;
+}
+
+.prompt-editor {
+    min-height: 220px;
+    max-height: 360px;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    padding: 14px;
+    margin-top: 8px;
+    line-height: 1.6;
+    color: var(--ink);
+}
+
+.prompt-editor:focus {
+    outline: 2px solid rgba(22, 106, 95, 0.18);
+    border-color: var(--accent);
+}
+
+.attachment-field {
+    min-width: 0;
+}
+
+.attachment-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+}
+
+.attachment-input-row input {
+    min-width: 0;
+}
+
+.attachment-input-row button {
+    min-height: 40px;
+    margin-top: 8px;
+    white-space: nowrap;
+}
+
+.verify-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.verify-actions button {
+    min-height: 40px;
+}
+
+.mode-guide {
+    display: grid;
+    gap: 10px;
+}
+
+.mode-guide p {
+    margin: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    background: #fbfcfe;
+    line-height: 1.45;
+}
+
+.verify-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: #cbd5e1;
+    margin-top: 4px;
+    flex: 0 0 auto;
+}
+
+.verify-dot.done {
+    background: var(--ok);
+}
+
+.verify-dot.invalid {
+    background: var(--danger);
+}
+
+.prompt-help-drawer {
+    margin-top: 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #f8fafc;
+    padding: 10px 12px;
+}
+
+.prompt-help-drawer summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: 800;
+}
+
+.prompt-help-drawer .mode-guide {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 10px;
+}
+
 .mini-status.generated,
 .mini-status.approved,
 .mini-status.drafted,
@@ -1068,6 +1233,20 @@ button.primary.wide {
     }
 
     .job-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .verify-shell,
+    .verify-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .verify-list-panel {
+        position: static;
+        max-height: none;
+    }
+
+    .prompt-help-drawer .mode-guide {
         grid-template-columns: 1fr;
     }
 }
@@ -1158,6 +1337,27 @@ button.primary.wide {
     .ai-inline {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
+    .verify-shell {
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 12px;
+    }
+
+    .verify-list-panel {
+        top: 74px;
+        max-height: calc(100vh - 88px);
+    }
+
+    .verify-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 1100px) and (max-width: 1299px) {
+    .verify-shell {
+        grid-template-columns: 320px minmax(0, 1fr);
+    }
+
 }
 
 /* Wide campaign workbench: use horizontal space before adding page scroll. */

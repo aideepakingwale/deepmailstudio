@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Verify Recipients - DeepMail Studio{% endblock %}
+{% block content %}
+<section class="workspace-head verify-head">
+    <div>
+        <p class="eyebrow">Sheet Verification</p>
+        <h1>Verify recipients before generation</h1>
+        <p>{{ job.context_prompt or "No campaign context provided." }}</p>
+    </div>
+    <div class="workspace-meta">
+        <span class="pill">Rows: {{ job.records|length }}</span>
+        <span class="pill">Provider: {{ ai.provider }}</span>
+        <span class="pill">Model: {{ ai.active_model }}</span>
+    </div>
+</section>
+
+<section class="verify-shell" data-job-id="{{ job.id }}">
+    <aside class="verify-list-panel">
+        <div class="panel-head">
+            <div>
+                <h2>Uploaded Rows</h2>
+                <p id="verifySummary">Review pending</p>
+            </div>
+            <a class="button-secondary" href="{{ url_for('job_view', job_id=job.id) }}">Workbench</a>
+        </div>
+        <div class="verify-progress">
+            <div class="progress-label">
+                <span>Verification progress</span>
+                <strong id="verifyProgressText">0%</strong>
+            </div>
+            <div class="progress-track"><div id="verifyProgressFill" class="progress-fill"></div></div>
+        </div>
+        <div id="verifyRecipientList" class="recipient-list"></div>
+    </aside>
+
+    <section class="verify-editor-panel">
+        <article class="editor-state verify-editor">
+            <div class="recipient-summary">
+                <div>
+                    <p class="eyebrow">Recipient Configuration</p>
+                    <h2 id="verifyRecipientName">Select a recipient</h2>
+                    <p id="verifyRecipientMeta">Review sheet data and prompt behavior before generation.</p>
+                </div>
+                <span id="verifyStatusBadge" class="badge"></span>
+            </div>
+
+            <div id="verifyErrorBox" class="alert danger hidden"></div>
+            <div id="verifyNotesBox" class="alert neutral hidden"></div>
+
+            <div class="verify-grid">
+                <label>Salutation<input id="verifySalutation"></label>
+                <label>First Name<input id="verifyFirstName"></label>
+                <label>Surname<input id="verifySurname"></label>
+                <label>Email<input id="verifyEmail"></label>
+                <label>CC<input id="verifyCc"></label>
+                <label>BCC<input id="verifyBcc"></label>
+                <label>Language<input id="verifyLanguage" placeholder="English, Hindi, Marathi"></label>
+                <label>Tone<input id="verifyTone" placeholder="friendly, official, business"></label>
+                <label>Content Length<input id="verifyLength" placeholder="short, medium, long"></label>
+                <label class="attachment-field">
+                    Attachments
+                    <span class="attachment-input-row">
+                        <input id="verifyAttachments" placeholder="C:\\path\\file.pdf; C:\\path\\image.png">
+                        <button id="chooseAttachmentsBtn" type="button">Choose Files</button>
+                    </span>
+                    <input id="verifyAttachmentPicker" class="hidden" type="file" multiple>
+                </label>
+            </div>
+
+            <div class="prompt-mode-card">
+                <label>
+                    Prompt Handling
+                    <select id="verifyPromptMode">
+                        <option value="append">Append to campaign prompt</option>
+                        <option value="enhance">Enhance/personalize campaign prompt</option>
+                        <option value="override">Override campaign prompt for this recipient</option>
+                        <option value="ignore">Ignore row prompt</option>
+                    </select>
+                </label>
+                <p id="promptModeHelp">Append keeps the campaign context authoritative and adds recipient-specific instructions.</p>
+            </div>
+
+            <label>
+                Recipient Prompt
+                <div class="toolbar compact-toolbar">
+                    <button data-verify-command="bold" type="button"><b>B</b></button>
+                    <button data-verify-command="italic" type="button"><i>I</i></button>
+                    <button data-verify-command="insertUnorderedList" type="button">List</button>
+                    <button id="clearPromptFormattingBtn" type="button">Plain Text</button>
+                </div>
+                <div id="verifyPromptEditor" class="prompt-editor" contenteditable="true"></div>
+            </label>
+
+            <div class="verify-actions">
+                <button id="saveRecipientConfigBtn" class="success" type="button">Save Row</button>
+                <button id="markVerifiedBtn" type="button">Mark Row Verified</button>
+                <button id="continueGenerationBtn" class="primary" type="button">Verify Sheet And Continue</button>
+            </div>
+
+            <details class="prompt-help-drawer">
+                <summary>How row prompts behave</summary>
+                <div class="mode-guide">
+                    <p><strong>Append</strong> adds row instructions after the campaign context.</p>
+                    <p><strong>Enhance</strong> uses the row prompt for personalization and nuance.</p>
+                    <p><strong>Override</strong> lets this row replace conflicting campaign details.</p>
+                    <p><strong>Ignore</strong> uses only the campaign prompt and recipient fields.</p>
+                </div>
+            </details>
+        </article>
+    </section>
+</section>
+
+<script src="{{ url_for('static', filename='verify.js') }}?v=20260516-verify-files"></script>
+{% endblock %}

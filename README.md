@@ -109,6 +109,22 @@ SMTP_SECURITY=starttls
 
 Use an existing mailbox/free SMTP provider so there is no extra operating cost. Free providers have daily/hourly sending limits, so start with small batches. If SMTP is not configured, use **Create Draft**. The app writes `.eml` files into the `drafts` folder, which can be opened in desktop email clients.
 
+## Sender Profile
+
+Sender name, email, title, organization, contact details, and signature can be configured when creating a campaign or edited later from **Campaign Settings**. The AI uses this profile while generating the closing/signature, and outgoing drafts/messages use the sender name/email where applicable.
+
+Optional `.env` defaults:
+
+```text
+SENDER_NAME=Your Name
+SENDER_EMAIL=you@example.com
+SENDER_TITLE=Project Lead
+SENDER_ORGANIZATION=Your Company
+SENDER_PHONE=
+SENDER_WEBSITE=
+SENDER_SIGNATURE_HTML=
+```
+
 ## Local Email Client Sending
 
 DeepMail Studio detects local desktop mail clients from Windows app paths. Automatic local-client sending is supported for classic Microsoft Outlook through COM automation. SMTP remains available as a mailbox-based automatic sending option when configured.

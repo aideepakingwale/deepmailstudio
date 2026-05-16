@@ -35,6 +35,13 @@ const els = {
     brandCtaTextInput: document.getElementById("brandCtaTextInput"),
     brandCtaUrlInput: document.getElementById("brandCtaUrlInput"),
     brandFooterInput: document.getElementById("brandFooterInput"),
+    senderNameInput: document.getElementById("senderNameInput"),
+    senderEmailInput: document.getElementById("senderEmailInput"),
+    senderTitleInput: document.getElementById("senderTitleInput"),
+    senderOrganizationInput: document.getElementById("senderOrganizationInput"),
+    senderPhoneInput: document.getElementById("senderPhoneInput"),
+    senderWebsiteInput: document.getElementById("senderWebsiteInput"),
+    senderSignatureInput: document.getElementById("senderSignatureInput"),
     formatBlockSelect: document.getElementById("formatBlockSelect"),
     textColorInput: document.getElementById("textColorInput"),
     linkBtn: document.getElementById("linkBtn"),
@@ -109,12 +116,12 @@ function renderMailClients(defaultClientId = "") {
     if (!sendable.length) {
         els.mailClientSelect.innerHTML = '<option value="">No automatic sender detected</option>';
         els.mailClientSelect.disabled = true;
-        els.sendSelectedBtn.disabled = true;
         const visibleClients = mailClients
             .filter((client) => client.installed)
             .map((client) => `${client.name}: ${client.reason || client.detail}`)
             .join(" | ");
         els.mailClientHelp.textContent = visibleClients || "Configure SMTP or install classic Outlook with pywin32 support.";
+        updateSelectedSendUi();
         return;
     }
     els.mailClientSelect.disabled = false;
@@ -293,7 +300,10 @@ function updateSelectedSendUi() {
         els.selectedSendCount.textContent = `${selectedForSend.size} selected`;
     }
     if (els.sendSelectedBtn) {
-        els.sendSelectedBtn.disabled = selectedForSend.size === 0 || !els.mailClientSelect?.value;
+        els.sendSelectedBtn.disabled = selectedForSend.size === 0;
+        els.sendSelectedBtn.title = selectedForSend.size === 0
+            ? "Select one or more approved emails first."
+            : (els.mailClientSelect?.value ? "Send selected approved emails." : "No automatic sender is currently available.");
     }
 }
 
@@ -307,6 +317,7 @@ function updateMailClientHelp() {
 async function setBusy(button, label, action) {
     const original = button.textContent;
     button.disabled = true;
+    button.classList.add("busy");
     button.textContent = label;
     try {
         await action();
@@ -315,6 +326,8 @@ async function setBusy(button, label, action) {
     } finally {
         button.textContent = original;
         button.disabled = false;
+        button.classList.remove("busy");
+        updateSelectedSendUi();
     }
 }
 
@@ -344,7 +357,9 @@ els.selectApprovedBtn?.addEventListener("click", () => {
 
 els.sendSelectedBtn?.addEventListener("click", () => setBusy(els.sendSelectedBtn, "Sending...", async () => {
     const client = mailClients.find((item) => item.id === els.mailClientSelect.value);
-    if (!client) throw new Error("Choose a sending client first.");
+    if (!client) {
+        throw new Error("No automatic sender is available right now. Configure SMTP, or activate/sign in to classic Outlook and refresh DeepMail Studio.");
+    }
     const ok = confirm(`Send ${selectedForSend.size} approved email(s) now using ${client.name}?`);
     if (!ok) return;
     const result = await api(`/api/jobs/${jobId}/send-selected`, {
@@ -367,6 +382,7 @@ els.saveContextBtn?.addEventListener("click", () => setBusy(els.saveContextBtn, 
             context_prompt: els.jobContextInput.value,
             use_row_prompts: els.useRowPromptsInput.checked,
             brand: collectBrand(),
+            sender: collectSender(),
         }),
     });
     await loadJob();
@@ -396,7 +412,9 @@ els.draftBtn?.addEventListener("click", () => setBusy(els.draftBtn, "Drafting...
 
 els.sendBtn?.addEventListener("click", () => setBusy(els.sendBtn, "Sending...", async () => {
     const client = mailClients.find((item) => item.id === els.mailClientSelect?.value);
-    if (!client) throw new Error("Choose a sending client first.");
+    if (!client) {
+        throw new Error("No automatic sender is available right now. Configure SMTP, or activate/sign in to classic Outlook and refresh DeepMail Studio.");
+    }
     const ok = confirm(`Approve and send this email now using ${client.name}?`);
     if (!ok) return;
     await persistReview(true);
@@ -479,6 +497,18 @@ function collectBrand() {
         cta_text: els.brandCtaTextInput?.value || "",
         cta_url: els.brandCtaUrlInput?.value || "",
         footer: els.brandFooterInput?.value || "",
+    };
+}
+
+function collectSender() {
+    return {
+        name: els.senderNameInput?.value || "",
+        email: els.senderEmailInput?.value || "",
+        title: els.senderTitleInput?.value || "",
+        organization: els.senderOrganizationInput?.value || "",
+        phone: els.senderPhoneInput?.value || "",
+        website: els.senderWebsiteInput?.value || "",
+        signature_html: els.senderSignatureInput?.value || "",
     };
 }
 

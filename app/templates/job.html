@@ -8,6 +8,7 @@
         <p>{{ job.context_prompt or "No campaign context provided." }}</p>
     </div>
     <div class="workspace-meta">
+        <a class="pill" href="{{ url_for('verify_recipients_view', job_id=job.id) }}">Verify Sheet</a>
         <span class="pill">Provider: {{ ai.provider }}</span>
         <span class="pill">Model: {{ ai.active_model }}</span>
     </div>
@@ -70,7 +71,7 @@
             <summary>
                 <span>
                     <strong>Campaign Settings</strong>
-                    <small>Context and brand controls</small>
+                    <small>Context, brand, and sender controls</small>
                 </span>
             </summary>
             <div class="settings-body">
@@ -119,6 +120,40 @@
                 <label>
                     Footer Text
                     <input id="brandFooterInput" value="{{ brand.footer or '' }}">
+                </label>
+            </details>
+            {% set sender = sender_defaults if sender_defaults is defined else (job.sender if job.sender is defined and job.sender else {}) %}
+            <details class="brand-settings">
+                <summary>Sender Profile</summary>
+                <div class="form-grid">
+                    <label>
+                        Sender Name
+                        <input id="senderNameInput" value="{{ sender.name or '' }}">
+                    </label>
+                    <label>
+                        Sender Email
+                        <input id="senderEmailInput" value="{{ sender.email or '' }}">
+                    </label>
+                    <label>
+                        Title / Role
+                        <input id="senderTitleInput" value="{{ sender.title or '' }}">
+                    </label>
+                    <label>
+                        Organization
+                        <input id="senderOrganizationInput" value="{{ sender.organization or '' }}">
+                    </label>
+                    <label>
+                        Phone
+                        <input id="senderPhoneInput" value="{{ sender.phone or '' }}">
+                    </label>
+                    <label>
+                        Website
+                        <input id="senderWebsiteInput" value="{{ sender.website or '' }}">
+                    </label>
+                </div>
+                <label>
+                    Signature
+                    <textarea id="senderSignatureInput" rows="6">{{ sender.signature_html or '' }}</textarea>
                 </label>
             </details>
             <button id="saveContextBtn">Save Context Settings</button>
@@ -210,5 +245,5 @@
     </section>
 </section>
 
-<script src="{{ url_for('static', filename='app.js') }}?v=20260516-send2"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=20260516-sender"></script>
 {% endblock %}
