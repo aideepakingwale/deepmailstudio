@@ -10,7 +10,7 @@ import ssl
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 from pathlib import Path
@@ -37,6 +37,7 @@ load_dotenv(BASE_DIR / ".env")
 GENERATION_QUEUE: Queue[tuple[str, str, str]] = Queue()
 GENERATION_WORKER_STARTED = False
 GENERATION_WORKER_LOCK = threading.Lock()
+JOB_FILE_LOCK = threading.RLock()
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 OFFICIAL_TONES = {"official", "business", "formal", "strict", "angry", "upset"}
@@ -141,6 +142,7 @@ def create_app() -> Flask:
         payload = request.get_json(force=True)
         job["context_prompt"] = str(payload.get("context_prompt", "")).strip()
         job["use_row_prompts"] = bool(payload.get("use_row_prompts"))
+        job["brand"] = build_brand_config(payload.get("brand", {}))
         append_log(job_id, "-", "context_updated", "Campaign context/settings updated by human reviewer")
         save_job(job)
         return jsonify({"ok": True, "job": job})
@@ -220,12 +222,17 @@ def create_job(sheet_file, context_prompt: str, form: dict[str, Any]) -> dict[st
         "source_file": str(upload_path),
         "context_prompt": context_prompt,
         "use_row_prompts": form.get("use_row_prompts") == "on",
+        "auto_start_generation": form.get("auto_start_generation", "on") == "on",
+        "brand": build_brand_config(form),
         "smtp": build_smtp_config(form, include_password=True),
         "ai": ai_config(),
         "records": records,
     }
     save_job(job)
     append_log(job_id, "-", "created", f"Loaded {len(records)} recipient rows")
+    if job["auto_start_generation"]:
+        queued = enqueue_all_pending_records(job)
+        append_log(job_id, "-", "auto_start_generation", f"Queued {queued} valid recipient rows")
     return job
 
 
@@ -234,9 +241,12 @@ def start_generation_worker() -> None:
     with GENERATION_WORKER_LOCK:
         if GENERATION_WORKER_STARTED:
             return
-        worker = threading.Thread(target=generation_worker_loop, daemon=True, name="generation-worker")
-        worker.start()
+        worker_count = max(1, int(get_setting("GENERATION_WORKERS", "3") or "3"))
+        for index in range(worker_count):
+            worker = threading.Thread(target=generation_worker_loop, daemon=True, name=f"generation-worker-{index + 1}")
+            worker.start()
         GENERATION_WORKER_STARTED = True
+        recover_active_generations()
 
 
 def generation_worker_loop() -> None:
@@ -260,6 +270,41 @@ def generation_worker_loop() -> None:
             GENERATION_QUEUE.task_done()
 
 
+def recover_active_generations() -> None:
+    max_age_minutes = int(get_setting("GENERATION_RECOVERY_MAX_AGE_MINUTES", "120") or "120")
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+    for path in JOBS_DIR.glob("*.json"):
+        try:
+            job = load_job(path.stem)
+        except Exception:
+            continue
+        for record in job.get("records", []):
+            if record.get("status") in {"queued", "generating"} and record.get("last_generation_request_id"):
+                started_at = parse_iso_datetime(record.get("last_generation_started_at") or record.get("updated_at"))
+                if started_at and started_at < cutoff:
+                    append_log(
+                        job["id"],
+                        record["id"],
+                        "generation_reset_stale",
+                        f"request_id={record['last_generation_request_id']}; older than {max_age_minutes} minutes",
+                    )
+                    record["status"] = "pending"
+                    record["errors"] = []
+                    record["updated_at"] = utc_now()
+                    update_record_in_job(job["id"], record["id"], lambda latest_record, source=record: latest_record.update(source))
+                    continue
+                append_log(
+                    job["id"],
+                    record["id"],
+                    "generation_recovered",
+                    f"request_id={record['last_generation_request_id']}; requeued after server start",
+                )
+                record["status"] = "queued"
+                record["updated_at"] = utc_now()
+                update_record_in_job(job["id"], record["id"], lambda latest_record, source=record: latest_record.update(source))
+                GENERATION_QUEUE.put((job["id"], record["id"], record["last_generation_request_id"]))
+
+
 def enqueue_generation(job: dict[str, Any], record: dict[str, Any]) -> str:
     if record.get("status") == "invalid":
         raise ValueError("; ".join(record.get("errors", [])))
@@ -280,37 +325,54 @@ def enqueue_generation(job: dict[str, Any], record: dict[str, Any]) -> str:
         "generation_queued",
         f"request_id={request_id}; provider={current_ai['provider']}; model={current_ai['active_model']}; endpoint={current_ai['active_endpoint']}",
     )
-    save_job(job)
+    update_record_in_job(job["id"], record["id"], lambda latest_record: latest_record.update(record))
     GENERATION_QUEUE.put((job["id"], record["id"], request_id))
     return request_id
 
 
+def enqueue_all_pending_records(job: dict[str, Any]) -> int:
+    queued = 0
+    latest_job = load_job(job["id"])
+    for record in latest_job.get("records", []):
+        if record.get("status") in {"pending", "failed"} and not record.get("errors"):
+            enqueue_generation(latest_job, record)
+            latest_job = load_job(job["id"])
+            queued += 1
+    return queued
+
+
 def run_generation(job: dict[str, Any], record: dict[str, Any], request_id: str) -> None:
     current_ai = ai_config()
-    record["status"] = "generating"
-    record["last_generation_request_id"] = request_id
-    record["last_generation_started_at"] = utc_now()
-    record["last_generation_provider"] = current_ai["provider"]
-    record["last_generation_model"] = current_ai["active_model"]
-    record["generation_attempts"] = int(record.get("generation_attempts") or 0) + 1
+    started_at = utc_now()
+    def mark_generating(latest_record: dict[str, Any]) -> None:
+        latest_record["status"] = "generating"
+        latest_record["last_generation_request_id"] = request_id
+        latest_record["last_generation_started_at"] = started_at
+        latest_record["last_generation_provider"] = current_ai["provider"]
+        latest_record["last_generation_model"] = current_ai["active_model"]
+        latest_record["updated_at"] = utc_now()
+    mark_generating(record)
     append_log(
         job["id"],
         record["id"],
         "generation_started",
         f"request_id={request_id}; provider={current_ai['provider']}; model={current_ai['active_model']}; endpoint={current_ai['active_endpoint']}",
     )
-    save_job(job)
+    update_record_in_job(job["id"], record["id"], mark_generating)
 
     subject, body_html, notes = generate_email(job, record)
-    record["subject"] = subject
-    record["body_html"] = body_html
-    record["quality_notes"] = notes
-    record["errors"] = []
-    record["status"] = "generated"
-    record["last_generation_completed_at"] = utc_now()
-    record["updated_at"] = utc_now()
+    completed_at = utc_now()
+    def mark_generated(latest_record: dict[str, Any]) -> None:
+        latest_record["subject"] = subject
+        latest_record["body_html"] = body_html
+        latest_record["quality_notes"] = notes
+        latest_record["errors"] = []
+        latest_record["status"] = "generated"
+        latest_record["last_generation_completed_at"] = completed_at
+        latest_record["updated_at"] = utc_now()
+    mark_generated(record)
     append_log(job["id"], record["id"], "generated", f"request_id={request_id}; {notes}")
-    save_job(job)
+    update_record_in_job(job["id"], record["id"], mark_generated)
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
@@ -410,7 +472,18 @@ def generate_email(job: dict[str, Any], record: dict[str, Any]) -> tuple[str, st
             return subject, body_html, notes + f" Local AI model returned malformed JSON, so template fallback was used: {exc}"
         raise
     body_html = polish_html(body_html, record)
+    body_html = sanitize_email_html(body_html)
     notes = validate_generated_email(subject, body_html, record)
+    language_issue = validate_language_requirement(subject, body_html, record)
+    if language_issue:
+        if should_fallback_to_template():
+            fallback_subject, fallback_body, fallback_notes = generate_template_email(job, record)
+            return (
+                fallback_subject,
+                fallback_body,
+                f"{fallback_notes} Local AI output rejected for language mismatch: {language_issue}",
+            )
+        raise ValueError(language_issue)
     alignment_issue = validate_context_alignment(job, subject, body_html)
     if alignment_issue:
         if should_fallback_to_template():
@@ -432,17 +505,31 @@ def build_generation_prompt(job: dict[str, Any], record: dict[str, Any]) -> str:
     use_row_prompts = bool(job.get("use_row_prompts"))
     row_prompt = record.get("content_prompt") if use_row_prompts else ""
     row_prompt_label = "Recipient-specific prompt" if use_row_prompts else "Recipient-specific prompt ignored for this job"
+    brand = get_brand_config(job)
+    language = record.get("language") or "English"
+    language_instruction = language_rules(language)
     return f"""
 You are an agentic email copywriter and reviewer. Create one personalized email.
 
 Authoritative campaign context:
 {job.get("context_prompt") or "No global context was provided."}
 
+Brand and rich HTML requirements:
+- Brand name: {brand["name"] or "Not specified"}
+- Brand voice: {brand["voice"] or "Warm, clear, trustworthy"}
+- Primary color: {brand["primary_color"]}
+- Accent color: {brand["accent_color"]}
+- Logo URL/path: {brand["logo_url"] or "None"}
+- CTA text: {brand["cta_text"] or "None"}
+- CTA URL: {brand["cta_url"] or "None"}
+- Footer: {brand["footer"] or "None"}
+- Layout style: {brand["layout"]}
+
 Recipient:
 - Salutation: {record.get("salutation") or "not specified"}
 - Name: {full_name}
 - Email: {record.get("emailid")}
-- Language: {record.get("language") or "English"}
+- Language: {language}
 - Tone: {record.get("email_tone") or "friendly"}
 - Desired length: {record.get("content_length") or "medium"}
 - Attachments/images referenced: {attachment_names}
@@ -453,7 +540,14 @@ Requirements:
 - The authoritative campaign context is the main event/topic and must not be replaced.
 - Apply recipient-specific prompts only when they support the campaign context.
 - If a recipient-specific prompt conflicts with the campaign context, ignore the conflicting part unless it starts with "OVERRIDE:".
+- Produce rich, email-client-friendly HTML using inline styles.
+- Use a polished branded layout with header, body sections, key details, CTA button when CTA text is available, and footer.
+- Keep the HTML self-contained. Do not use external CSS, JavaScript, forms, or unsupported interactive elements.
+- Use table-free simple HTML unless a table is needed for layout compatibility.
 - Use the requested language and tone.
+- Language is a hard requirement: write the subject, greeting, body, CTA, and closing in {language}.
+- {language_instruction}
+- Keep proper nouns, brand names, email addresses, URLs, and unavoidable technical terms as-is, but translate normal sentence text.
 - Include a natural greeting using salutation and first name where appropriate.
 - Use clean HTML suitable for an email body. Use paragraphs, bullets, and bold text when useful.
 - Smileys are allowed only for friendly, funny, romantic, or casual tones. Do not use smileys for official, business, formal, angry, upset, or strict tones.
@@ -639,23 +733,105 @@ def generate_template_email(job: dict[str, Any], record: dict[str, Any]) -> tupl
     context = job.get("context_prompt") or "I wanted to share this note with you."
     custom = record.get("content_prompt") if job.get("use_row_prompts") else ""
     tone = record.get("email_tone", "friendly")
+    brand = get_brand_config(job)
     subject_base = first_sentence(context) or "A note for you"
-    subject = f"{subject_base[:72]}".strip()
-
+    localized = localize_template_text(record, context, subject_base)
+    subject = localized["subject"]
+    greeting = localized["greeting"].format(name=html.escape(name or record.get("first_name", "there")))
+    logo_html = ""
+    if brand["logo_url"]:
+        logo_html = (
+            f'<img src="{html.escape(brand["logo_url"])}" alt="{html.escape(brand["name"] or "Brand")}" '
+            'style="max-width:160px;height:auto;display:block;margin-bottom:16px;">'
+        )
+    cta_html = ""
+    if brand["cta_text"]:
+        href = brand["cta_url"] or "#"
+        cta_html = (
+            f'<p style="margin:24px 0 4px;"><a href="{html.escape(href)}" '
+            f'style="background:{html.escape(brand["primary_color"])};color:#ffffff;text-decoration:none;'
+            'padding:12px 18px;border-radius:6px;display:inline-block;font-weight:700;">'
+            f'{html.escape(brand["cta_text"])}</a></p>'
+        )
     body_parts = [
-        f"<p>Hello {html.escape(name or record.get('first_name', 'there'))},</p>",
-        f"<p>{html.escape(context)}</p>",
+        f'<div style="font-family:Segoe UI,Arial,sans-serif;line-height:1.6;color:#1f2937;max-width:680px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#ffffff;">',
+        f'<div style="background:{html.escape(brand["primary_color"])};padding:22px;color:#ffffff;">'
+        f'{logo_html}<h1 style="margin:0;font-size:24px;line-height:1.25;">{html.escape(subject)}</h1>'
+        f'<p style="margin:8px 0 0;color:#eef2ff;">{html.escape(brand["name"] or "Personal Invitation")}</p></div>',
+        '<div style="padding:24px;">',
+        f'<p style="margin-top:0;">{greeting}</p>',
+        f'<p>{html.escape(localized["context"])}</p>',
     ]
     if custom:
         body_parts.append(f"<p>{html.escape(custom)}</p>")
     if attachment_paths(record):
         body_parts.append("<p><strong>Attached:</strong> Please find the relevant file(s) included with this email.</p>")
+    body_parts.append(
+        f'<div style="border-left:4px solid {html.escape(brand["accent_color"])};background:#f9fafb;'
+        f'padding:14px 16px;margin:18px 0;"><strong>{html.escape(localized["key_label"])}</strong> {html.escape(localized["key_note"])}</div>'
+    )
+    body_parts.append(cta_html)
     closing = "Warm regards" if tone.lower() not in OFFICIAL_TONES else "Regards"
     if tone.lower() in {"friendly", "funny", "casual"}:
-        body_parts.append("<p>Looking forward to hearing from you.</p>")
-    body_parts.append(f"<p>{closing},<br>{html.escape(get_setting('SMTP_FROM_NAME', 'Local AI Mail Agent'))}</p>")
+        body_parts.append(f"<p>{html.escape(localized['friendly_line'])}</p>")
+    body_parts.append(f"<p>{html.escape(localized['closing'] if tone.lower() in OFFICIAL_TONES else closing)},<br>{html.escape(brand['name'] or get_setting('SMTP_FROM_NAME', 'DeepMail Studio'))}</p>")
+    body_parts.append("</div>")
+    if brand["footer"]:
+        body_parts.append(
+            f'<div style="background:#f3f4f6;padding:14px 24px;color:#6b7280;font-size:12px;">{html.escape(brand["footer"])}</div>'
+        )
+    body_parts.append("</div>")
     notes = "Generated with deterministic zero-cost template provider. Connect Ollama, Groq free tier, Gemini free tier, or a local LM Studio server for richer zero-cost personalization."
     return subject, "\n".join(body_parts), validate_generated_email(subject, "\n".join(body_parts), record) + " " + notes
+
+
+def localize_template_text(record: dict[str, Any], context: str, subject_base: str) -> dict[str, str]:
+    language = (record.get("language") or "English").strip().lower()
+    if language in {"hindi", "हिंदी"}:
+        localized_context = localize_context_summary(context, "hindi")
+        return {
+            "subject": "तत्काल सूचना: महत्वपूर्ण बैठक",
+            "greeting": "नमस्ते {name},",
+            "context": localized_context,
+            "key_label": "मुख्य सूचना:",
+            "key_note": "कृपया विवरण ध्यान से पढ़ें और आवश्यक होने पर तुरंत उत्तर दें।",
+            "friendly_line": "आपके सहयोग के लिए धन्यवाद।",
+            "closing": "सादर",
+        }
+    if language in {"marathi", "मराठी"}:
+        localized_context = localize_context_summary(context, "marathi")
+        return {
+            "subject": "तातडीची सूचना: महत्त्वाची बैठक",
+            "greeting": "नमस्कार {name},",
+            "context": localized_context,
+            "key_label": "मुख्य सूचना:",
+            "key_note": "कृपया तपशील काळजीपूर्वक वाचा आणि आवश्यक असल्यास त्वरित प्रतिसाद द्या.",
+            "friendly_line": "आपल्या सहकार्याबद्दल धन्यवाद.",
+            "closing": "सादर",
+        }
+    return {
+        "subject": f"{subject_base[:72]}".strip(),
+        "greeting": "Hello {name},",
+        "context": context,
+        "key_label": "Key note:",
+        "key_note": "Please review the details and respond if needed.",
+        "friendly_line": "Looking forward to hearing from you.",
+        "closing": "Regards",
+    }
+
+
+def localize_context_summary(context: str, language: str) -> str:
+    normalized = context.lower()
+    is_emergency = any(term in normalized for term in ["urgent", "emergency", "critical", "power failure"])
+    if language == "hindi":
+        if is_emergency:
+            return "ऑफिस में गंभीर बिजली समस्या के कारण एक तत्काल और महत्वपूर्ण बैठक बुलानी है। कृपया इस विषय को प्राथमिकता दें और आवश्यक चर्चा के लिए उपलब्ध रहें।"
+        return f"यह महत्वपूर्ण सूचना है: {context}"
+    if language == "marathi":
+        if is_emergency:
+            return "ऑफिसमध्ये गंभीर वीजपुरवठा समस्या निर्माण झाल्यामुळे तातडीची आणि महत्त्वाची बैठक बोलवायची आहे. कृपया या विषयाला प्राधान्य द्या आणि आवश्यक चर्चेसाठी उपलब्ध राहा."
+        return f"ही महत्त्वाची सूचना आहे: {context}"
+    return context
 
 
 def first_sentence(text: str) -> str:
@@ -672,6 +848,14 @@ def polish_html(body_html: str, record: dict[str, Any]) -> str:
     return body_html
 
 
+def sanitize_email_html(body_html: str) -> str:
+    cleaned = re.sub(r"<script\b[^>]*>.*?</script>", "", body_html or "", flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"<style\b[^>]*>.*?</style>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"</?(?:html|head|body)\b[^>]*>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*```(?:html)?|```\s*$", "", cleaned.strip(), flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def validate_generated_email(subject: str, body_html: str, record: dict[str, Any]) -> str:
     notes = []
     if not subject:
@@ -681,11 +865,40 @@ def validate_generated_email(subject: str, body_html: str, record: dict[str, Any
     plain_body = strip_tags(body_html).lower()
     first_name = record.get("first_name", "").lower()
     surname = record.get("surname", "").lower()
-    if first_name and first_name not in plain_body and not (surname and surname in plain_body):
+    language = (record.get("language") or "English").strip().lower()
+    if language == "english" and first_name and first_name not in plain_body and not (surname and surname in plain_body):
         notes.append("Recipient name was not found in body.")
     if record.get("email_tone", "").lower() in OFFICIAL_TONES and has_emoji(body_html):
         notes.append("Official/business tone should not contain smileys.")
     return " ".join(notes) or "Validation passed: grammar, personalization, tone, and email structure look acceptable for human review."
+
+
+def language_rules(language: str) -> str:
+    normalized = language.strip().lower()
+    if normalized in {"hindi", "हिंदी"}:
+        return "Use natural Hindi written primarily in Devanagari script. Do not write the email in English."
+    if normalized in {"marathi", "मराठी"}:
+        return "Use natural Marathi written primarily in Devanagari script. Do not write the email in English or Hindi."
+    if normalized == "english":
+        return "Use natural English."
+    return f"Use natural {language}. Do not switch to English unless the row explicitly asks for bilingual content."
+
+
+def validate_language_requirement(subject: str, body_html: str, record: dict[str, Any]) -> str:
+    language = (record.get("language") or "English").strip().lower()
+    plain = strip_tags(f"{subject} {body_html}")
+    letters = re.findall(r"[A-Za-z\u0900-\u097F]", plain)
+    if not letters:
+        return ""
+    devanagari = len(re.findall(r"[\u0900-\u097F]", plain))
+    latin = len(re.findall(r"[A-Za-z]", plain))
+    total = max(1, devanagari + latin)
+
+    if language in {"hindi", "हिंदी", "marathi", "मराठी"} and devanagari / total < 0.35:
+        return f"Expected {record.get('language')} in Devanagari script, but output appears mostly non-Devanagari."
+    if language == "english" and devanagari / total > 0.25:
+        return "Expected English, but output contains too much Devanagari text."
+    return ""
 
 
 def validate_context_alignment(job: dict[str, Any], subject: str, body_html: str) -> str:
@@ -694,6 +907,7 @@ def validate_context_alignment(job: dict[str, Any], subject: str, body_html: str
         return ""
 
     generated = strip_tags(f"{subject} {body_html}").lower()
+    generated_has_devanagari = bool(re.search(r"[\u0900-\u097F]", generated))
     date_tokens = re.findall(r"\b(?:\d{1,2}|20\d{2}|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b", context)
     missing_date_tokens = [token for token in date_tokens if token not in generated]
 
@@ -711,6 +925,8 @@ def validate_context_alignment(job: dict[str, Any], subject: str, body_html: str
 
     if date_tokens and missing_date_tokens:
         return f"Generated email missed required date token(s): {', '.join(missing_date_tokens)}"
+    if generated_has_devanagari:
+        return ""
     if len(unique_keywords) >= 3 and len(matched_keywords) < 2:
         return f"Generated email did not align with campaign keywords: {', '.join(unique_keywords[:6])}"
     return ""
@@ -754,7 +970,7 @@ def build_email_message(job: dict[str, Any], record: dict[str, Any], smtp_config
 
     smtp_config = smtp_config or build_smtp_config(job.get("smtp", {}))
     from_email = smtp_config.get("from_email") or smtp_config.get("username") or "local-agent@example.local"
-    from_name = smtp_config.get("from_name") or "Local AI Mail Agent"
+    from_name = smtp_config.get("from_name") or "DeepMail Studio"
 
     message = EmailMessage()
     message["Subject"] = record["subject"]
@@ -764,7 +980,7 @@ def build_email_message(job: dict[str, Any], record: dict[str, Any], smtp_config
         message["Cc"] = ", ".join(parse_email_list(record.get("cc", "")))
     if parse_email_list(record.get("bcc", "")):
         message["Bcc"] = ", ".join(parse_email_list(record.get("bcc", "")))
-    message["Message-ID"] = make_msgid(domain="local-ai-mail-agent")
+    message["Message-ID"] = make_msgid(domain="deepmailstudio.local")
     message.set_content(strip_tags(record["body_html"]))
     message.add_alternative(record["body_html"], subtype="html")
 
@@ -795,12 +1011,30 @@ def build_smtp_config(values: dict[str, Any], include_password: bool = True) -> 
         "port": clean(values.get("smtp_port") or values.get("port") or os.getenv("SMTP_PORT", "587")),
         "username": clean(values.get("smtp_username") or values.get("username") or os.getenv("SMTP_USERNAME", "")),
         "from_email": clean(values.get("smtp_from_email") or values.get("from_email") or os.getenv("SMTP_FROM_EMAIL", "")),
-        "from_name": clean(values.get("smtp_from_name") or values.get("from_name") or os.getenv("SMTP_FROM_NAME", "Local AI Mail Agent")),
+        "from_name": clean(values.get("smtp_from_name") or values.get("from_name") or os.getenv("SMTP_FROM_NAME", "DeepMail Studio")),
         "security": clean(values.get("smtp_security") or values.get("security") or os.getenv("SMTP_SECURITY", "starttls")),
     }
     if include_password:
         config["password"] = password
     return config
+
+
+def build_brand_config(values: dict[str, Any]) -> dict[str, str]:
+    return {
+        "name": clean(values.get("brand_name") or values.get("name") or ""),
+        "voice": clean(values.get("brand_voice") or values.get("voice") or ""),
+        "primary_color": clean(values.get("brand_primary_color") or values.get("primary_color") or "#166a5f"),
+        "accent_color": clean(values.get("brand_accent_color") or values.get("accent_color") or "#b4462d"),
+        "logo_url": clean(values.get("brand_logo_url") or values.get("logo_url") or ""),
+        "cta_text": clean(values.get("brand_cta_text") or values.get("cta_text") or ""),
+        "cta_url": clean(values.get("brand_cta_url") or values.get("cta_url") or ""),
+        "footer": clean(values.get("brand_footer") or values.get("footer") or ""),
+        "layout": clean(values.get("brand_layout") or values.get("layout") or "modern branded invitation"),
+    }
+
+
+def get_brand_config(job: dict[str, Any]) -> dict[str, str]:
+    return build_brand_config(job.get("brand", {}))
 
 
 def smtp_defaults() -> dict[str, Any]:
@@ -941,13 +1175,28 @@ def load_job(job_id: str) -> dict[str, Any]:
     path = JOBS_DIR / f"{safe_filename(job_id)}.json"
     if not path.exists():
         raise FileNotFoundError(f"Job not found: {job_id}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    with JOB_FILE_LOCK:
+        return json.loads(path.read_text(encoding="utf-8"))
 
 
 def save_job(job: dict[str, Any]) -> None:
     job["updated_at"] = utc_now()
     path = JOBS_DIR / f"{job['id']}.json"
-    path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+    with JOB_FILE_LOCK:
+        path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+
+
+def update_record_in_job(job_id: str, record_id: str, updater) -> dict[str, Any]:
+    with JOB_FILE_LOCK:
+        path = JOBS_DIR / f"{safe_filename(job_id)}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Job not found: {job_id}")
+        job = json.loads(path.read_text(encoding="utf-8"))
+        record = find_record(job, record_id)
+        updater(record)
+        job["updated_at"] = utc_now()
+        path.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        return record
 
 
 def mark_failed(job: dict[str, Any], record: dict[str, Any], error: str):
@@ -996,6 +1245,18 @@ def read_job_events(job_id: str) -> list[dict[str, str]]:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 if __name__ == "__main__":

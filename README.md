@@ -1,6 +1,6 @@
-# Local AI Mail Agent
+# DeepMail Studio
 
-A locally running, zero-cost agentic email automation tool for Windows desktops. It reads a recipient Excel/CSV sheet, generates personalized email content with a local provider, pauses for human WYSIWYG review, then creates `.eml` drafts or sends via an existing SMTP mailbox with attachments.
+A locally running, zero-cost agentic email automation studio for Windows desktops. It reads a recipient Excel/CSV sheet, generates personalized brand-ready email content with a local/free AI provider, pauses for human WYSIWYG review, then creates `.eml` drafts or sends via an existing SMTP mailbox with attachments.
 
 ## Quick Start
 
@@ -113,7 +113,7 @@ Use an existing mailbox/free SMTP provider so there is no extra operating cost. 
 
 1. Upload a sheet and provide the global email context.
 2. The agent validates every row and attachment path.
-3. For each recipient, click **Generate**.
+3. By default, the agent auto-starts generation for all valid rows. You can turn this off before creating the job.
 4. Review and edit the generated subject/body in the WYSIWYG editor.
 5. Click **Approve**.
 6. Click **Send SMTP** or **Create Draft**.

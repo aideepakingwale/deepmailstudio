@@ -24,11 +24,32 @@ const els = {
     saveContextBtn: document.getElementById("saveContextBtn"),
     jobContextInput: document.getElementById("jobContextInput"),
     useRowPromptsInput: document.getElementById("useRowPromptsInput"),
+    brandNameInput: document.getElementById("brandNameInput"),
+    brandVoiceInput: document.getElementById("brandVoiceInput"),
+    brandPrimaryInput: document.getElementById("brandPrimaryInput"),
+    brandAccentInput: document.getElementById("brandAccentInput"),
+    brandLogoInput: document.getElementById("brandLogoInput"),
+    brandLayoutInput: document.getElementById("brandLayoutInput"),
+    brandCtaTextInput: document.getElementById("brandCtaTextInput"),
+    brandCtaUrlInput: document.getElementById("brandCtaUrlInput"),
+    brandFooterInput: document.getElementById("brandFooterInput"),
+    formatBlockSelect: document.getElementById("formatBlockSelect"),
+    textColorInput: document.getElementById("textColorInput"),
+    linkBtn: document.getElementById("linkBtn"),
+    ctaBtn: document.getElementById("ctaBtn"),
+    dividerBtn: document.getElementById("dividerBtn"),
+    htmlSourceBtn: document.getElementById("htmlSourceBtn"),
+    htmlSourcePanel: document.getElementById("htmlSourcePanel"),
+    htmlSourceInput: document.getElementById("htmlSourceInput"),
+    loadHtmlBtn: document.getElementById("loadHtmlBtn"),
+    applyHtmlBtn: document.getElementById("applyHtmlBtn"),
     refreshEventsBtn: document.getElementById("refreshEventsBtn"),
     eventList: document.getElementById("eventList"),
     countPending: document.getElementById("countPending"),
     countReady: document.getElementById("countReady"),
     countSent: document.getElementById("countSent"),
+    progressText: document.getElementById("progressText"),
+    progressFill: document.getElementById("progressFill"),
     detailEmail: document.getElementById("detailEmail"),
     detailCc: document.getElementById("detailCc"),
     detailBcc: document.getElementById("detailBcc"),
@@ -97,6 +118,10 @@ function renderCounts() {
     els.countPending.textContent = pending;
     els.countReady.textContent = ready;
     els.countSent.textContent = sent;
+    const completed = ready + sent;
+    const percent = job.records.length ? Math.round((completed / job.records.length) * 100) : 0;
+    if (els.progressText) els.progressText.textContent = `${percent}%`;
+    if (els.progressFill) els.progressFill.style.width = `${percent}%`;
 }
 
 function renderRecipientList() {
@@ -107,7 +132,7 @@ function renderRecipientList() {
         button.innerHTML = `
             <strong>${escapeHtml(displayName(record))}</strong>
             <small>${escapeHtml(record.emailid || "No email")}</small>
-            <span class="mini-status">${escapeHtml(record.status)}</span>
+            <span class="mini-status ${escapeHtml(record.status)}">${escapeHtml(record.status)}</span>
         `;
         button.addEventListener("click", () => {
             selectedId = record.id;
@@ -148,7 +173,7 @@ function renderSelected() {
     els.detailGeneration.textContent = generationSummary(record);
 
     const activeGeneration = ["queued", "generating"].includes(record.status);
-    els.generateBtn.textContent = activeGeneration ? "Working..." : (record.subject || record.body_html ? "Regenerate" : "Generate");
+    els.generateBtn.textContent = activeGeneration ? "Working..." : (record.subject || record.body_html ? "Regen" : "Generate");
     els.generateBtn.disabled = record.status === "invalid" || activeGeneration;
     els.approveBtn.disabled = record.status === "invalid" || record.status === "sent";
     els.draftBtn.disabled = record.status === "invalid" || record.status === "sent";
@@ -233,6 +258,7 @@ els.saveContextBtn?.addEventListener("click", () => setBusy(els.saveContextBtn, 
         body: JSON.stringify({
             context_prompt: els.jobContextInput.value,
             use_row_prompts: els.useRowPromptsInput.checked,
+            brand: collectBrand(),
         }),
     });
     await loadJob();
@@ -278,6 +304,74 @@ document.querySelectorAll("[data-command]").forEach((button) => {
         els.bodyEditor.focus();
     });
 });
+
+els.formatBlockSelect?.addEventListener("change", () => {
+    document.execCommand("formatBlock", false, els.formatBlockSelect.value);
+    els.bodyEditor.focus();
+});
+
+els.textColorInput?.addEventListener("input", () => {
+    document.execCommand("foreColor", false, els.textColorInput.value);
+    els.bodyEditor.focus();
+});
+
+els.linkBtn?.addEventListener("click", () => {
+    const url = prompt("Link URL");
+    if (!url) return;
+    document.execCommand("createLink", false, url);
+    els.bodyEditor.focus();
+});
+
+els.ctaBtn?.addEventListener("click", () => {
+    const text = els.brandCtaTextInput?.value || prompt("CTA text") || "Learn More";
+    const url = els.brandCtaUrlInput?.value || prompt("CTA URL") || "#";
+    const color = els.brandPrimaryInput?.value || "#166a5f";
+    document.execCommand(
+        "insertHTML",
+        false,
+        `<p style="margin:24px 0;"><a href="${escapeAttribute(url)}" style="background:${escapeAttribute(color)};color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:6px;display:inline-block;font-weight:700;">${escapeHtml(text)}</a></p>`
+    );
+    els.bodyEditor.focus();
+});
+
+els.dividerBtn?.addEventListener("click", () => {
+    document.execCommand("insertHTML", false, '<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0;">');
+    els.bodyEditor.focus();
+});
+
+els.htmlSourceBtn?.addEventListener("click", () => {
+    els.htmlSourcePanel.classList.toggle("hidden");
+    if (!els.htmlSourcePanel.classList.contains("hidden")) {
+        els.htmlSourceInput.value = els.bodyEditor.innerHTML;
+    }
+});
+
+els.loadHtmlBtn?.addEventListener("click", () => {
+    els.htmlSourceInput.value = els.bodyEditor.innerHTML;
+});
+
+els.applyHtmlBtn?.addEventListener("click", () => {
+    els.bodyEditor.innerHTML = els.htmlSourceInput.value;
+    showBox(els.notesBox, "HTML source applied to the editor. Approve to save it.");
+});
+
+function collectBrand() {
+    return {
+        name: els.brandNameInput?.value || "",
+        voice: els.brandVoiceInput?.value || "",
+        primary_color: els.brandPrimaryInput?.value || "#166a5f",
+        accent_color: els.brandAccentInput?.value || "#b4462d",
+        logo_url: els.brandLogoInput?.value || "",
+        layout: els.brandLayoutInput?.value || "",
+        cta_text: els.brandCtaTextInput?.value || "",
+        cta_url: els.brandCtaUrlInput?.value || "",
+        footer: els.brandFooterInput?.value || "",
+    };
+}
+
+function escapeAttribute(value) {
+    return String(value ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
 
 if (jobId) {
     loadJob();

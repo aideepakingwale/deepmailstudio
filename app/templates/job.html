@@ -1,12 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Job {{ job.id }} - Local AI Mail Agent{% endblock %}
+{% block title %}Campaign {{ job.id }} - DeepMail Studio{% endblock %}
 {% block content %}
+<section class="workspace-head">
+    <div>
+        <p class="eyebrow">Campaign Workspace</p>
+        <h1>Campaign {{ job.id }}</h1>
+        <p>{{ job.context_prompt or "No campaign context provided." }}</p>
+    </div>
+    <div class="workspace-meta">
+        <span class="pill">Provider: {{ ai.provider }}</span>
+        <span class="pill">Model: {{ ai.active_model }}</span>
+    </div>
+</section>
+
 <section class="job-shell" data-job-id="{{ job.id }}">
     <aside class="recipients-panel">
         <div class="panel-head">
             <div>
-                <h1>Job {{ job.id }}</h1>
-                <p>{{ job.records|length }} recipients</p>
+                <h2>Recipients</h2>
+                <p>{{ job.records|length }} total rows</p>
             </div>
             <button id="refreshBtn" class="icon-btn" title="Refresh">R</button>
         </div>
@@ -15,9 +27,19 @@
             <span><b id="countReady">0</b> ready</span>
             <span><b id="countSent">0</b> sent</span>
         </div>
+        {% if job.auto_start_generation %}
+        <div class="auto-note">Auto-start generation is enabled for this job.</div>
+        {% endif %}
+        <div class="progress-card">
+            <div class="progress-label">
+                <span>Campaign progress</span>
+                <strong id="progressText">0%</strong>
+            </div>
+            <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+        </div>
         <div id="recipientList" class="recipient-list"></div>
-        <div class="fallback-actions">
-            <h2>Direct Generate</h2>
+        <details class="fallback-actions">
+            <summary>Direct Generate</summary>
             <p>Local models can take several minutes. The row will show queued/generating while the worker runs.</p>
             {% for record in job.records %}
             <form method="post" action="{{ url_for('generate_record_form', job_id=job.id, record_id=record.id) }}">
@@ -26,25 +48,68 @@
                 </button>
             </form>
             {% endfor %}
-        </div>
+        </details>
     </aside>
 
     <section class="review-panel">
-        <div class="context-card">
-            <h2>Context Prompt</h2>
+        <details class="context-card settings-drawer">
+            <summary>
+                <span>
+                    <strong>Campaign Settings</strong>
+                    <small>Context and brand controls</small>
+                </span>
+            </summary>
+            <div class="settings-body">
             <textarea id="jobContextInput" rows="4">{{ job.context_prompt or "" }}</textarea>
             <label class="checkbox-label compact">
                 <input id="useRowPromptsInput" type="checkbox" {% if job.use_row_prompts %}checked{% endif %}>
                 Use row-level Content Prompt overrides from the sheet
             </label>
+            {% set brand = job.brand if job.brand is defined and job.brand else {} %}
+            <details class="brand-settings">
+                <summary>Brand Studio</summary>
+                <div class="form-grid">
+                    <label>
+                        Brand / Sender Name
+                        <input id="brandNameInput" value="{{ brand.name or '' }}">
+                    </label>
+                    <label>
+                        Brand Voice
+                        <input id="brandVoiceInput" value="{{ brand.voice or '' }}">
+                    </label>
+                    <label>
+                        Primary Color
+                        <input id="brandPrimaryInput" type="color" value="{{ brand.primary_color or '#166a5f' }}">
+                    </label>
+                    <label>
+                        Accent Color
+                        <input id="brandAccentInput" type="color" value="{{ brand.accent_color or '#b4462d' }}">
+                    </label>
+                    <label>
+                        Logo URL or Public Image Path
+                        <input id="brandLogoInput" value="{{ brand.logo_url or '' }}">
+                    </label>
+                    <label>
+                        Layout Style
+                        <input id="brandLayoutInput" value="{{ brand.layout or 'modern branded invitation' }}">
+                    </label>
+                    <label>
+                        CTA Text
+                        <input id="brandCtaTextInput" value="{{ brand.cta_text or '' }}">
+                    </label>
+                    <label>
+                        CTA URL
+                        <input id="brandCtaUrlInput" value="{{ brand.cta_url or '' }}">
+                    </label>
+                </div>
+                <label>
+                    Footer Text
+                    <input id="brandFooterInput" value="{{ brand.footer or '' }}">
+                </label>
+            </details>
             <button id="saveContextBtn">Save Context Settings</button>
-            <div class="ai-inline">
-                <span><b>Provider</b> {{ ai.provider }}</span>
-                <span><b>Model</b> {{ ai.active_model }}</span>
-                <span><b>Endpoint</b> {{ ai.active_endpoint }}</span>
-                <span><b>Zero-cost</b> {{ ai.zero_cost_mode }}</span>
             </div>
-        </div>
+        </details>
 
         <div id="emptyState" class="empty-state">
             <h2>Select a recipient</h2>
@@ -64,13 +129,24 @@
             <div id="notesBox" class="alert neutral hidden"></div>
 
             <div class="toolbar">
-                <button id="generateBtn">Generate</button>
+                <button id="generateBtn" title="Generate or regenerate">Generate</button>
+                <select id="formatBlockSelect" title="Text style">
+                    <option value="P">Paragraph</option>
+                    <option value="H2">Heading</option>
+                    <option value="H3">Subheading</option>
+                    <option value="BLOCKQUOTE">Quote</option>
+                </select>
                 <button data-command="bold" title="Bold"><b>B</b></button>
                 <button data-command="italic" title="Italic"><i>I</i></button>
                 <button data-command="insertUnorderedList" title="Bulleted list">List</button>
+                <input id="textColorInput" type="color" value="#166a5f" title="Text color">
+                <button id="linkBtn" title="Insert link">Link</button>
+                <button id="ctaBtn" title="Insert CTA button">CTA</button>
+                <button id="dividerBtn" title="Insert divider">Line</button>
+                <button id="htmlSourceBtn" title="Edit HTML source">HTML</button>
                 <button id="approveBtn" class="success">Approve</button>
-                <button id="draftBtn">Create Draft</button>
-                <button id="sendBtn" class="danger-soft">Send SMTP</button>
+                <button id="draftBtn" title="Create .eml draft">Draft</button>
+                <button id="sendBtn" class="danger-soft" title="Send through SMTP">Send</button>
             </div>
 
             <label>
@@ -82,6 +158,17 @@
                 Email Body
                 <div id="bodyEditor" class="wysiwyg" contenteditable="true"></div>
             </label>
+
+            <div id="htmlSourcePanel" class="html-source hidden">
+                <label>
+                    HTML Source
+                    <textarea id="htmlSourceInput" rows="12"></textarea>
+                </label>
+                <div class="toolbar">
+                    <button id="loadHtmlBtn">Load From Editor</button>
+                    <button id="applyHtmlBtn">Apply HTML</button>
+                </div>
+            </div>
 
             <details class="details">
                 <summary>Recipient row details</summary>
@@ -109,5 +196,5 @@
     </section>
 </section>
 
-<script src="{{ url_for('static', filename='app.js') }}?v=20260515-2"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v=20260516-space2"></script>
 {% endblock %}

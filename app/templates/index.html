@@ -1,10 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Create Job - Local AI Mail Agent{% endblock %}
+{% block title %}DeepMail Studio{% endblock %}
 {% block content %}
-<section class="hero-band">
+<section class="page-title">
     <div>
-        <h1>Agentic bulk email, reviewed before it sends.</h1>
-        <p>Upload a recipient sheet, give the campaign context, generate individualized messages locally, approve each one, then send with an existing SMTP mailbox or export email drafts.</p>
+        <p class="eyebrow">Local AI campaign workspace</p>
+        <h1>Generate, review, and send personalized HTML emails.</h1>
+        <p>Upload recipients, define the campaign and brand, then let the agent generate row-by-row drafts in the background for human approval.</p>
+    </div>
+    <div class="title-actions">
+        <a class="button-secondary" href="{{ url_for('sample_sheet') }}">Download Sample Sheet</a>
     </div>
 </section>
 
@@ -33,7 +37,13 @@
 
 <section class="grid two">
     <form class="panel" method="post" action="{{ url_for('create_job_route') }}" enctype="multipart/form-data">
-        <h2>New Campaign Job</h2>
+        <div class="section-head">
+            <div>
+                <p class="eyebrow">Step 1</p>
+                <h2>New Campaign</h2>
+            </div>
+            <span class="pill">Local first</span>
+        </div>
         <label>
             Recipient Sheet
             <input type="file" name="sheet" accept=".csv,.xlsx,.xls,.xlsm" required>
@@ -46,9 +56,64 @@
             <input type="checkbox" name="use_row_prompts">
             Use row-level Content Prompt overrides from the sheet
         </label>
+        <label class="checkbox-label">
+            <input type="checkbox" name="auto_start_generation" checked>
+            Auto-start AI generation for all valid rows after upload
+        </label>
 
         <div class="divider"></div>
-        <h3>SMTP Defaults</h3>
+        <div class="section-head compact">
+            <div>
+                <p class="eyebrow">Step 2</p>
+                <h3>Brand Studio</h3>
+            </div>
+        </div>
+        <div class="form-grid">
+            <label>
+                Brand / Sender Name
+                <input name="brand_name" value="DeepMail Studio" placeholder="Example: DeepMail Studio">
+            </label>
+            <label>
+                Brand Voice
+                <input name="brand_voice" placeholder="Warm, premium, celebratory">
+            </label>
+            <label>
+                Primary Color
+                <input name="brand_primary_color" type="color" value="#166a5f">
+            </label>
+            <label>
+                Accent Color
+                <input name="brand_accent_color" type="color" value="#b4462d">
+            </label>
+            <label>
+                Logo URL or Public Image Path
+                <input name="brand_logo_url" placeholder="https://.../logo.png">
+            </label>
+            <label>
+                Layout Style
+                <input name="brand_layout" placeholder="modern invitation, newsletter, announcement">
+            </label>
+            <label>
+                CTA Text
+                <input name="brand_cta_text" placeholder="RSVP Now">
+            </label>
+            <label>
+                CTA URL
+                <input name="brand_cta_url" placeholder="https://...">
+            </label>
+        </div>
+        <label>
+            Footer Text
+            <input name="brand_footer" placeholder="You are receiving this invitation from ...">
+        </label>
+
+        <div class="divider"></div>
+        <div class="section-head compact">
+            <div>
+                <p class="eyebrow">Step 3</p>
+                <h3>Sending Defaults</h3>
+            </div>
+        </div>
         <div class="form-grid">
             <label>
                 Host
@@ -83,18 +148,24 @@
                 </select>
             </label>
         </div>
-        <button class="primary" type="submit">Create Local Agent Job</button>
+        <button class="primary wide" type="submit">Create Campaign And Queue AI Drafts</button>
     </form>
 
-    <aside class="panel">
-        <h2>How The Agent Works</h2>
-        <ol class="steps">
-            <li>Reads and validates every row in your Excel or CSV sheet.</li>
-            <li>Combines global context with row-level tone, language, length, and override prompt.</li>
-            <li>Generates a personalized HTML email body with local models or free-tier AI providers.</li>
-            <li>Pauses for human review in the editor before sending.</li>
-            <li>Adds attachments, sends through SMTP, or creates a local `.eml` draft.</li>
-        </ol>
+    <aside class="side-stack">
+        <section class="panel">
+            <div class="section-head">
+                <div>
+                    <p class="eyebrow">Workflow</p>
+                    <h2>Agent Runbook</h2>
+                </div>
+            </div>
+            <ol class="steps">
+                <li><span>Validate</span> Check recipients, email fields, and attachments.</li>
+                <li><span>Generate</span> Queue background AI drafts for each valid row.</li>
+                <li><span>Review</span> Edit branded HTML in the WYSIWYG studio.</li>
+                <li><span>Send</span> Create drafts or send through SMTP after approval.</li>
+            </ol>
+        </section>
         <div class="callout">
             Zero-cost mode is enabled from <code>.env</code>. Use <code>AI_PROVIDER=template</code>, <code>ollama</code>, <code>lmstudio</code>, <code>groq</code>, <code>gemini</code>, or local <code>openai_compatible</code>. Row prompts are off by default to avoid accidental sample-data contamination.
         </div>
@@ -102,8 +173,13 @@
 </section>
 
 {% if jobs %}
-<section class="panel">
-    <h2>Recent Jobs</h2>
+<section class="panel recent-panel">
+    <div class="section-head">
+        <div>
+            <p class="eyebrow">Continue</p>
+            <h2>Recent Campaigns</h2>
+        </div>
+    </div>
     <div class="job-list">
         {% for job in jobs %}
         <a class="job-row" href="{{ url_for('job_view', job_id=job.id) }}">
